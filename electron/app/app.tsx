@@ -123,6 +123,7 @@ interface Settings {
   glowEffect: boolean
   captionStyle: Template['captionStyle']
   captionPosition: 'bottom' | 'center'
+  selectedLanguage: string
 }
 
 const defaultSettings: Settings = {
@@ -136,6 +137,7 @@ const defaultSettings: Settings = {
   glowEffect: false,
   captionStyle: 'karaoke',
   captionPosition: 'bottom',
+  selectedLanguage: 'en',
 }
 
 const templates: Template[] = [
@@ -499,7 +501,7 @@ export default function App() {
             fontName: getFontName(videoSettings.selectedFont),
             splitByWords: true,
             model: videoSettings.selectedModel,
-            language: null,
+            language: videoSettings.selectedLanguage,
             prompt: null,
             textColor: videoSettings.textColor,
             highlightWordColor: videoSettings.highlightWordColor,
@@ -736,6 +738,34 @@ export default function App() {
                       <SelectContent>
                         <SelectItem value="bottom">Bottom</SelectItem>
                         <SelectItem value="center">Center</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Language</label>
+                    <Select
+                      value={videoSettings.selectedLanguage}
+                      onValueChange={(value) => updateSettings({ selectedLanguage: value })}
+                    >
+                      <SelectTrigger className="w-full h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="en">English</SelectItem>
+                        <SelectItem value="ar">العربية (Arabic)</SelectItem>
+                        <SelectItem value="es">Español (Spanish)</SelectItem>
+                        <SelectItem value="fr">Français (French)</SelectItem>
+                        <SelectItem value="de">Deutsch (German)</SelectItem>
+                        <SelectItem value="ru">Русский (Russian)</SelectItem>
+                        <SelectItem value="zh">中文 (Chinese)</SelectItem>
+                        <SelectItem value="ja">日本語 (Japanese)</SelectItem>
+                        <SelectItem value="ko">한국어 (Korean)</SelectItem>
+                        <SelectItem value="pt">Português (Portuguese)</SelectItem>
+                        <SelectItem value="it">Italiano (Italian)</SelectItem>
+                        <SelectItem value="hi">हिन्दी (Hindi)</SelectItem>
+                        <SelectItem value="tr">Türkçe (Turkish)</SelectItem>
+                        <SelectItem value="nl">Nederlands (Dutch)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
