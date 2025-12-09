@@ -21,7 +21,7 @@ export class Sidecar {
   private start() {
     const __dirname = path.dirname(fileURLToPath(import.meta.url))
     const binName = process.platform === 'win32' ? 'core.exe' : 'core'
-    
+
     // Try different paths for development vs production
     const possiblePaths = [
       // Production paths (extraResources goes to Resources/ directly) - prioritize these first
@@ -35,9 +35,9 @@ export class Sidecar {
       // Bundled in app resources
       path.resolve(__dirname, '../../', binName)
     ]
-    
+
     let binPath = possiblePaths[0] // Default to dev path
-    
+
     // Find the first existing path
     for (const possiblePath of possiblePaths) {
       try {
@@ -121,13 +121,13 @@ export class Sidecar {
 
   private createFriendlyError(errorMessage: string): Error {
     const error = new Error()
-    
+
     // Determine error type and create user-friendly message
     if (errorMessage.includes('API key not provided') || errorMessage.includes('You didn\'t provide an API key')) {
       error.name = 'API_KEY_MISSING'
       error.message = 'OpenAI API key is not configured. Add it in settings for better transcription quality.'
     } else if (errorMessage.includes('401 Unauthorized') || errorMessage.includes('Unauthorized')) {
-      error.name = 'API_KEY_INVALID'  
+      error.name = 'API_KEY_INVALID'
       error.message = 'Invalid OpenAI API key. Please check the key in settings.'
     } else if (errorMessage.includes('No whisper models found') || errorMessage.includes('No local whisper models available')) {
       error.name = 'NO_LOCAL_MODELS'
@@ -155,7 +155,7 @@ export class Sidecar {
       error.name = 'UNKNOWN_ERROR'
       error.message = `An error occurred: ${errorMessage}`
     }
-    
+
     return error
   }
 
@@ -190,8 +190,8 @@ export class Sidecar {
     return this.writeLock
   }
 
-  call(method: string, params: any, onProgress?: (p: Progress) => void) {
-    const id = randomUUID()
+  call(method: string, params: any, onProgress?: (p: Progress) => void, requestId?: string) {
+    const id = requestId || randomUUID()
     console.log('[SIDECAR] Calling method:', method, 'with params:', params, 'id:', id)
 
     if (onProgress) this.progressCb = onProgress

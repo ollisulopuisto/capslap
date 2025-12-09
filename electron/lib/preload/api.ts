@@ -17,7 +17,7 @@ const api = {
 
 const rust = {
   openFiles: (filters?: any) => ipcRenderer.invoke('dialog:openFiles', { filters }),
-  call: (method: string, params: any) => ipcRenderer.invoke('core:call', { method, params }),
+  call: (method: string, params: any, requestId?: string) => ipcRenderer.invoke('core:call', { method, params, requestId }),
   onProgress: (cb: (p: any) => void) => {
     const listener = (_: any, msg: any) => cb(msg)
     ipcRenderer.on('core:progress', listener)

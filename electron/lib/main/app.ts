@@ -136,14 +136,15 @@ function registerRustIPC(mainWindow: BrowserWindow) {
   })
 
   ipcMain.handle('core:call', async (_evt, payload) => {
-    console.log('[MAIN] Core call:', payload.method, payload.params)
+    console.log('[MAIN] Core call:', payload.method, payload.params, payload.requestId)
     if (!core) {
       console.error('[MAIN] Core sidecar not initialized')
       throw new Error('Core sidecar not initialized')
     }
+    // Pass requestId if present
     return core.call(payload.method, payload.params, (p) => {
       console.log('[MAIN] Core progress:', p)
       mainWindow.webContents.send('core:progress', p)
-    })
+    }, payload.requestId)
   })
 }

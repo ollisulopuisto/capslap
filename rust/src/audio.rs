@@ -45,6 +45,7 @@ pub async fn extract_audio(id: &str, p: ExtractAudioParams, mut emit: impl FnMut
     };
 
     let mut cmd = TokioCommand::new("ffmpeg");
+    cmd.kill_on_drop(true);
     cmd.arg("-y")
        .arg("-i").arg(&p.input)
        .arg("-vn")

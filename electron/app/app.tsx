@@ -100,8 +100,8 @@ const showErrorToast = (error: any, count: number = 1) => {
 }
 
 interface Template {
-  id: 'oneliner' | 'karaoke' | 'vibrant'
-  captionStyle: 'karaoke' | 'oneliner' | 'vibrant'
+  id: 'oneliner' | 'karaoke' | 'vibrant' | 'storyteller'
+  captionStyle: 'karaoke' | 'oneliner' | 'vibrant' | 'storyteller'
   name: string
   src: string | null
   textColor: string
@@ -109,7 +109,7 @@ interface Template {
   outlineColor: string
   glowEffect: boolean
   font: string
-  position: 'bottom' | 'center'
+  position: 'bottom' | 'center' | 'safe-center'
 }
 
 interface Settings {
@@ -122,7 +122,7 @@ interface Settings {
   outlineColor: string
   glowEffect: boolean
   captionStyle: Template['captionStyle']
-  captionPosition: 'bottom' | 'center'
+  captionPosition: 'bottom' | 'center' | 'safe-center'
   selectedLanguage: string
   outputSize?: string
   cropStrategy?: string
@@ -138,8 +138,8 @@ const defaultSettings: Settings = {
   outlineColor: '#000000',
   glowEffect: false,
   captionStyle: 'karaoke',
-  captionPosition: 'bottom',
-  selectedLanguage: 'en',
+  captionPosition: 'safe-center',
+  selectedLanguage: 'auto',
   outputSize: 'original',
   cropStrategy: 'fit',
 }
@@ -180,6 +180,18 @@ const templates: Template[] = [
     glowEffect: false,
     font: 'roboto-bold',
     position: 'center',
+  },
+  {
+    id: 'storyteller',
+    captionStyle: 'storyteller',
+    name: 'Storyteller',
+    src: getVideoPath('vibrant.mp4'), // Placeholder until we have a specific one
+    textColor: '#ffffff',
+    highlightWordColor: '#ffff00',
+    outlineColor: '#000000',
+    glowEffect: true,
+    font: 'montserrat-black',
+    position: 'safe-center',
   },
 ]
 
@@ -399,6 +411,7 @@ export default function App() {
   const [_, setDragCounter] = useState(0)
   const [isApiKeySettingsOpen, setIsApiKeySettingsOpen] = useState(false)
   const [shouldGenerateAfterApiKey, setShouldGenerateAfterApiKey] = useState(false)
+  const [currentRequestId, setCurrentRequestId] = useState<string | null>(null)
 
   useEffect(() => {
     const savedSettings = localStorage.getItem('settings-v3')
@@ -488,6 +501,13 @@ export default function App() {
     }
   }
 
+  const handleCancel = async () => {
+    if (currentRequestId) {
+      toast.info('Cancelling generation...')
+      await window.rust.call('cancel', currentRequestId)
+    }
+  }
+
   const handleGenerate = async () => {
     if (!selectedVideos.length) {
       toast.error('Please select a video first')
@@ -509,6 +529,11 @@ export default function App() {
         cropStrategy: videoSettings.cropStrategy
       })
 
+
+
+      const requestId = crypto.randomUUID()
+      setCurrentRequestId(requestId)
+
       const results = await Promise.allSettled(
         selectedVideos.map(async (video) =>
           window.rust.call('generateCaptions', {
@@ -528,7 +553,7 @@ export default function App() {
             outputSize: videoSettings.outputSize,
             cropStrategy: videoSettings.cropStrategy,
             apiKey: apiKey,
-          })
+          }, requestId)
         )
       )
 
@@ -559,6 +584,7 @@ export default function App() {
       showErrorToast(error, 1)
     } finally {
       setIsGenerating(false)
+      setCurrentRequestId(null)
     }
   }
 
@@ -700,6 +726,23 @@ export default function App() {
             </div>
             <p className="text-sm text-muted-foreground truncate">Lightning-fast AI captions</p>
           </div>
+
+          <div className="p-4 border-b border-border/50">
+            {isGenerating ? (
+              <Button
+                variant="destructive"
+                className="w-full text-white bg-red-500 hover:bg-red-600 shadow-md transition-all duration-200"
+                onClick={handleCancel}
+              >
+                Abort Generation
+              </Button>
+            ) : (
+              <div className="text-center text-sm text-muted-foreground">
+                Ready to generate
+              </div>
+            )}
+          </div>
+
           <div className={cn('sidebar-content flex-1 flex flex-col overflow-y-auto scrollbar-hide')}>
             {/* Templates */}
             <div className="p-4 border-b border-border/50">
@@ -732,7 +775,7 @@ export default function App() {
                     <label className="text-xs text-muted-foreground mb-1 block">Style</label>
                     <Select
                       value={videoSettings.captionStyle}
-                      onValueChange={(value: 'karaoke' | 'oneliner') => updateSettings({ captionStyle: value })}
+                      onValueChange={(value: 'karaoke' | 'oneliner' | 'vibrant' | 'storyteller') => updateSettings({ captionStyle: value })}
                     >
                       <SelectTrigger className="w-full h-8 text-xs">
                         <SelectValue />
@@ -741,6 +784,7 @@ export default function App() {
                         <SelectItem value="karaoke">Karaoke</SelectItem>
                         <SelectItem value="oneliner">Oneliner</SelectItem>
                         <SelectItem value="vibrant">Vibrant</SelectItem>
+                        <SelectItem value="storyteller">Storyteller</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -749,14 +793,16 @@ export default function App() {
                     <label className="text-xs text-muted-foreground mb-1 block">Position</label>
                     <Select
                       value={videoSettings.captionPosition}
-                      onValueChange={(value: 'bottom' | 'center') => updateSettings({ captionPosition: value })}
+                      onValueChange={(value: 'bottom' | 'center' | 'safe-center') => updateSettings({ captionPosition: value })}
                     >
                       <SelectTrigger className="w-full  h-8 text-xs">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="bottom">Bottom</SelectItem>
+                        <SelectItem value="bottom">Bottom</SelectItem>
                         <SelectItem value="center">Center</SelectItem>
+                        <SelectItem value="safe-center">Safe Center (For Storytelling)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -771,6 +817,7 @@ export default function App() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
+                        <SelectItem value="auto">Detect language</SelectItem>
                         <SelectItem value="en">English</SelectItem>
                         <SelectItem value="fi">Suomi (Finnish)</SelectItem>
                         <SelectItem value="ar">العربية (Arabic)</SelectItem>
@@ -1125,7 +1172,7 @@ export default function App() {
             </Button>
           </div>
         </div>
-      </div>
+      </div >
     </>
   )
 }

@@ -910,6 +910,7 @@ pub async fn transcribe_with_ffmpeg_whisper(
 
     let ffmpeg_path = find_ffmpeg_binary().await.map_err(|e| anyhow::anyhow!("FFmpeg not found: {}", e))?;
     let mut cmd = TokioCommand::new(ffmpeg_path);
+    cmd.kill_on_drop(true);
     cmd.arg("-y") // overwrite output
        .arg("-i").arg(audio_path)
        .arg("-af");
@@ -934,7 +935,7 @@ pub async fn transcribe_with_ffmpeg_whisper(
 
     let output = cmd.output().await?;
 
-    if !output.status.success() {
+    if !output.status().success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow::anyhow!("FFmpeg Whisper failed: {}", stderr));
     }

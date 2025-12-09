@@ -183,7 +183,7 @@ async fn optimized_multi_format_encode(
 
     // Process formats with limited concurrency (2 at a time for optimal resource usage)
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
-    let mut tasks = Vec::new();
+    let mut tasks = tokio::task::JoinSet::new();
 
     for (idx, (format, ass_path, target_w, target_h)) in format_ass_files.into_iter().enumerate() {
         let format = format.clone();
@@ -194,7 +194,7 @@ async fn optimized_multi_format_encode(
         let input_path = input_path.clone();
         let crop_strat = crop_strategy.clone().unwrap_or_else(|| "fit".to_string());
 
-        let task = tokio::spawn(async move {
+        tasks.spawn(async move {
             // Acquire semaphore permit for bounded concurrency
             let _permit = semaphore.acquire().await.unwrap();
 
@@ -221,17 +221,16 @@ async fn optimized_multi_format_encode(
                 height: target_h,
             })
         });
-
-        tasks.push(task);
     }
 
     // Wait for all tasks to complete and collect results
     let mut captioned_videos = Vec::new();
-    for (idx, task) in tasks.into_iter().enumerate() {
-        let result = task.await.map_err(|e| anyhow!("Concurrent task failed: {}", e))??;
+    while let Some(res) = tasks.join_next().await {
+        let result = res.map_err(|e| anyhow!("Task join failed: {}", e))??;
         captioned_videos.push(result);
     }
-
+    
+    // Sort results to match input order if needed, but for now just returning collected results
     Ok(captioned_videos)
 }
 
@@ -295,12 +294,14 @@ async fn try_encode_with_encoder(
     // Build optimized filter with format conversion AND subtitles in one pass
     // Use encoder-specific format optimization (NV12 for VideoToolbox/NVENC, yuv420p for software)
     let ass = ass_path.to_string_lossy().to_string();
+    let is_hdr = crate::video::is_hdr(probe_result);
     let vf = crate::video::build_fitpad_filter_with_options(
         target_w,
         target_h,
         Some(&ass),
         hardware_encoder,
-        crop_strategy
+        crop_strategy,
+        is_hdr
     );
 
     // Determine optimal audio codec and settings
@@ -982,8 +983,14 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
         for (p_idx, phrase) in phrases.iter().enumerate() {
             let tokens_upper = normalize_tokens(&phrase.spans);
 
-            // Split phrase into single-line segments, same as karaoke mode
-            let segments = split_phrase_for_width(&tokens_upper, &phrase.spans, w, style.font_size);
+            // Split phrase into segments suitable for the current style
+            let segments = if style.align == 5 {
+                // Storyteller: multiple lines per segment
+                split_phrase_multiline(&tokens_upper, &phrase.spans, w, style.font_size)
+            } else {
+                // Standard: 1-2 lines max
+                split_phrase_for_width(&tokens_upper, &phrase.spans, w, style.font_size)
+            };
 
             for (segment_tokens, segment_spans) in segments {
                 let segment_tokens_orig = original_tokens(&segment_spans);
@@ -995,14 +1002,36 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                 let hi_opt = choose_highlight_idx(&segment_tokens_orig, &segment_spans, p_idx, &mut hl_state);
                 let hi_idx = hi_opt.unwrap_or(usize::MAX); // usize::MAX => no highlight
 
-                // Build a ONE-LINE body: only colors/sizes + entrance animation
-                // (no \pos/\bord/\shad in here; those are added by the glow/stroke layers)
-                let text_body = assemble_colored_two_lines(
-                    &segment_tokens, hi_idx, &white_bgr, &hi_bgr,
-                    usize::MAX,               // no line break
-                    &bounce_tag(),            // entrance scale
-                    style.font_size
-                );
+                let is_storyteller = style.align == 5; // Safe-center / Storyteller mode
+
+                // Build text body
+                let text_body = if is_storyteller {
+                    // For storyteller, use multiline assembly with dynamic width balancing
+                     let est_char_width = (style.font_size as f32 * 0.50).max(1.0);
+                     let max_chars = ((w as f32 * 0.85) / est_char_width).floor() as usize;
+                     
+                     let total_chars: usize = segment_tokens.iter().map(|t| t.len()).sum();
+                     // Target 3-5 lines for a nice block
+                     let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
+                     // Clamp: at least 25 chars (for long words), at most max_chars
+                     let wrapping_width = soft_target.clamp(25, max_chars);
+
+                     // Prepend bounce tag for entrance
+                     let mut body = bounce_tag();
+                     body.push_str(&assemble_multiline(
+                        &segment_tokens, hi_idx, &white_bgr, &hi_bgr,
+                        style.font_size, wrapping_width
+                    ));
+                    body
+                } else {
+                     // Standard 1-2 line assembly
+                    assemble_colored_two_lines(
+                        &segment_tokens, hi_idx, &white_bgr, &hi_bgr,
+                        usize::MAX,               // no line break forced here, let it flow or use split logic
+                        &bounce_tag(),            // entrance scale
+                        style.font_size
+                    )
+                };
 
                 // Your layered renderer (glow + black stroke + fill)
                 let glow_w    = style.outline_w as f32 * 2.0;
@@ -1068,6 +1097,7 @@ fn default_ass_style(
     // Determine vertical position and alignment based on position parameter
     let (align, margin_v) = match position.unwrap_or("bottom") {
         "center" => (5, 0), // Alignment 5 = middle center, margin_v 0 for center
+        "safe-center" => (5, 0), // Alignment 5 = middle center, margin_v 0 for center
         _ => (2, pct_to_margin_v(frame_h, 88.0)), // Alignment 2 = bottom center (default)
     };
 
@@ -1083,6 +1113,131 @@ fn default_ass_style(
         margin_v,
         highlight,
     }
+}
+
+// Split text into multiple lines (3-4 lines) for "Storyteller" mode
+// Aim for balanced lines, filling the middle of the screen
+fn split_phrase_multiline(tokens: &[String], spans: &[WordSpan], frame_w: u32, font_px: u32) -> Vec<(Vec<String>, Vec<WordSpan>)> {
+    let est_char_width = (font_px as f32 * 0.50).max(1.0); // Slightly tighter estimate for packing
+    let max_chars_per_line = ((frame_w as f32 * 0.85) / est_char_width).floor() as usize; 
+    let max_lines = 4;
+    // Target roughly 3-4 lines if text is long enough, otherwise fill normally.
+    // Calculate total chars to see if we SHOULD force multiline
+    let total_chars: usize = tokens.iter().map(|t| t.len()).sum();
+    
+    // If text is short, just use standard wrapping (it might end up as 1-2 lines)
+    if total_chars < max_chars_per_line * 2 {
+        return split_phrase_for_width(tokens, spans, frame_w, font_px);
+    }
+
+    // For longer text, we want to balance it into a block of 3-4 lines.
+    // Heuristic: target line length = total_chars / 3.5 (aiming for 3-4 lines)
+    // trimmed to be at most max_chars_per_line
+    let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
+    let target_chars = soft_target.clamp(25, max_chars_per_line); // Enforce min width 25
+    
+    let mut segments = Vec::new();
+    // In this specific "Storyteller" mode, we act as if the entire phrase is ONE segment (one screen),
+    // but the renderer expects a list of segments. 
+    // Wait, the renderer iterates segments and shows them sequentially. 
+    // If we want *one static block* of 3-4 lines, we need to return ONE segment containing ALL tokens,
+    // but we need to insert manual line breaks (\N) into the text later?
+    //
+    // NO, `build_ass_document` iterates segments and creates a new Dialogue line for each.
+    // If we split into multiple segments here, they will appear sequentially (replacing each other).
+    // The user wants "a 3-4 line preset... so caption doesn't overlap".
+    // This implies showing MORE text at once.
+    // So we should return FEWER segments, each containing MORE tokens, formatted with line breaks.
+    
+    // Actually, `split_phrase_for_width` splits based on WIDTH only.
+    // If we want a block of text, we should pack as much as possible into one segment (up to 4 lines),
+    // and then the rendering logic needs to handle the line breaks.
+    //
+    // CURRENT LOGIC:
+    // `assemble_colored_two_lines` inserts `\N` after `line1_count`. It only supports 2 lines!
+    // We need to upgrade `assemble_colored_two_lines` or create a `assemble_multiline` function.
+    
+    // Let's first pack tokens into chunks that fit in 4 lines.
+    let mut current_chunk_tokens = Vec::new();
+    let mut current_chunk_spans = Vec::new();
+    let mut current_chunk_lines = 1;
+    let mut current_line_len = 0;
+    
+    for (token, span) in tokens.iter().zip(spans.iter()) {
+        let token_len = token.len() + 1; // + space
+        
+        if current_line_len + token_len > target_chars {
+             // Line full. Can we add another line to this chunk?
+             if current_chunk_lines < max_lines {
+                 current_chunk_lines += 1;
+                 current_line_len = token_len;
+                 current_chunk_tokens.push(token.clone());
+                 current_chunk_spans.push(span.clone());
+             } else {
+                 // Chunk full (4 lines). Push and start new chunk.
+                 segments.push((current_chunk_tokens.clone(), current_chunk_spans.clone()));
+                 current_chunk_tokens.clear();
+                 current_chunk_spans.clear();
+                 current_chunk_tokens.push(token.clone());
+                 current_chunk_spans.push(span.clone());
+                 current_chunk_lines = 1;
+                 current_line_len = token_len;
+             }
+        } else {
+            current_line_len += token_len;
+            current_chunk_tokens.push(token.clone());
+            current_chunk_spans.push(span.clone());
+        }
+    }
+     if !current_chunk_tokens.is_empty() {
+        segments.push((current_chunk_tokens, current_chunk_spans));
+    }
+    
+    segments
+}
+
+// Assemble multi-line text with highlighting
+fn assemble_multiline(
+    tokens: &[String], hi: usize,
+    white_bgr: &str, hi_bgr: &str,
+    font_size: u32,
+    max_chars_per_line: usize
+) -> String {
+    // Similar to assemble_colored_two_lines but auto-wraps based on max_chars
+    let white = format!("{{\\1c&H{}&\\fs{}}}", white_bgr, font_size);
+    // Bigger font for highlight? Maybe not for block text, it might shift layout too much.
+    // Let's keep same size for stability in 4-line blocks.
+    let has_highlighting = hi != usize::MAX;
+    let hi_style = if has_highlighting {
+        format!("{{\\1c&H{}&\\fs{}}}", hi_bgr, font_size)
+    } else {
+        white.clone()
+    };
+
+    let mut s = String::new();
+    let mut line_len = 0;
+    
+    for (i, token) in tokens.iter().enumerate() {
+        let t_clean = token.replace('\\', r"\\").replace('{', r"\{").replace('}', r"\}");
+        let t_len = t_clean.len();
+        
+        // Simple wrapping check
+        if line_len > 0 && line_len + t_len + 1 > max_chars_per_line {
+            s.push_str(r"\N");
+            line_len = 0;
+        } else if line_len > 0 {
+            s.push(' ');
+            line_len += 1;
+        }
+        
+        // Color logic
+        let should_highlight = has_highlighting && i == hi;
+        s.push_str(if should_highlight { &hi_style } else { &white });
+        s.push_str(&t_clean);
+        
+        line_len += t_len;
+    }
+    s
 }
 
 /// Convert hex color string (e.g., "#ffffff") to ASS color format (e.g., "&H00FFFFFF")

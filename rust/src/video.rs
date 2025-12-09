@@ -177,8 +177,8 @@ pub fn parse_target_ar(format: &str) -> anyhow::Result<TargetAR> {
 /// Build a unified video filter for fit+pad operations with high-quality scaling
 /// This creates a single filtergraph that handles scaling and padding efficiently
 /// Optimized for hardware encoders (VideoToolbox prefers NV12, others use yuv420p)
-pub fn build_fitpad_filter(target_w: u32, target_h: u32, subtitle_path: Option<&str>) -> String {
-    build_fitpad_filter_with_format(target_w, target_h, subtitle_path, HardwareEncoder::Software)
+pub fn build_fitpad_filter(target_w: u32, target_h: u32, subtitle_path: Option<&str>, is_hdr: bool) -> String {
+    build_fitpad_filter_with_format(target_w, target_h, subtitle_path, HardwareEncoder::Software, is_hdr)
 }
 
 // / Build optimized video filter with encoder-specific format optimization
@@ -188,10 +188,11 @@ pub fn build_fitpad_filter_with_format(
     target_w: u32,
     target_h: u32,
     subtitle_path: Option<&str>,
-    encoder: HardwareEncoder
+    encoder: HardwareEncoder,
+    is_hdr: bool
 ) -> String {
     // Legacy support wrapper
-    build_fitpad_filter_with_options(target_w, target_h, subtitle_path, encoder, "fit")
+    build_fitpad_filter_with_options(target_w, target_h, subtitle_path, encoder, "fit", is_hdr)
 }
 
 // / Extended filter builder with crop strategy support
@@ -200,7 +201,8 @@ pub fn build_fitpad_filter_with_options(
     target_h: u32,
     subtitle_path: Option<&str>,
     encoder: HardwareEncoder,
-    crop_strategy: &str
+    crop_strategy: &str,
+    is_hdr: bool
 ) -> String {
     let mut filters = Vec::new();
 
@@ -228,8 +230,22 @@ pub fn build_fitpad_filter_with_options(
         ));
     }
 
+
     // 2. Tonemapping (HDR -> SDR)
-    filters.push("tonemap=hable:desat=0".to_string());
+    // Only apply if input is actually HDR
+    if is_hdr {
+        // High-quality zscale tone mapping chain
+        // 1. Linearize: transfer=linear, npl=100 (assume 100 nits target for SDR)
+        // 2. Convert to GBR float for processing
+        // 3. Map primaries to BT.709
+        // 4. Tone map (hable or mobius)
+        // 5. Convert back to BT.709 transfer/primaries/range
+        // Note: We use a simplified robust chain that works well for most content
+        filters.push("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p".to_string());
+    }
+    // For SDR content, we do NOTHING (preserving original colors)
+    // The previous code was unconditionally applying tonemap which washed out SDR colors
+
 
     // 3. Subtitles
     if let Some(path) = subtitle_path {
@@ -579,6 +595,9 @@ pub struct ProbeResult {
     pub video: bool,              // True if file has video track
     pub audio_codec: Option<String>, // Audio codec name (e.g., "aac", "mp3", "pcm_s16le")
     pub audio_bitrate: Option<i32>,  // Audio bitrate in bits/sec (e.g., 128000)
+    pub color_space: Option<String>,      // Color space (e.g. "bt2020nc")
+    pub color_transfer: Option<String>,   // Color transfer characteristics (e.g. "smpte2084" for PQ, "arib-std-b67" for HLG)
+    pub color_primaries: Option<String>,  // Color primaries (e.g. "bt2020")
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -628,6 +647,7 @@ pub async fn export_video(id: &str, p: ExportParams, mut emit: impl FnMut(RpcEve
 
     let ffmpeg_path = find_ffmpeg_binary().await.map_err(|e| anyhow::anyhow!("FFmpeg not found: {}", e))?;
     let mut cmd = TokioCommand::new(ffmpeg_path);
+    cmd.kill_on_drop(true);
     cmd.arg("-y").arg("-i").arg(&p.input);
 
     // High-quality scaler settings
@@ -683,6 +703,18 @@ pub async fn export_video(id: &str, p: ExportParams, mut emit: impl FnMut(RpcEve
                     message: "Warning: Could not determine video dimensions for format conversion".into()
                 });
             }
+        }
+    }
+
+    // Add tone mapping if HDR detected (after scaling/padding)
+    if let Some(probe_result) = &pr {
+        if is_hdr(probe_result) {
+            emit(RpcEvent::Log {
+                id: id.into(),
+                message: "HDR content detected, applying zscale tone mapping...".into()
+            });
+            // High-quality zscale tone mapping chain
+            vf_parts.push("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p".to_string());
         }
     }
 
@@ -787,6 +819,7 @@ pub async fn export_video(id: &str, p: ExportParams, mut emit: impl FnMut(RpcEve
 
         // Rebuild command with software encoder
         let mut fallback_cmd = TokioCommand::new(find_ffmpeg_binary().await?);
+        fallback_cmd.kill_on_drop(true);
         fallback_cmd.arg("-y").arg("-i").arg(&p.input);
         fallback_cmd.arg("-sws_flags").arg("lanczos+accurate_rnd+full_chroma_int");
 
@@ -865,8 +898,11 @@ pub async fn probe(id: &str, input: &str, mut emit: impl FnMut(RpcEvent)) -> any
         .arg("-show_format")                 // Include information about file format
         .arg(input)                          // The file to analyze
         .stdout(std::process::Stdio::piped()) // Capture the output
-        .stderr(std::process::Stdio::piped()) // Capture stderr for debugging
-        .spawn()?;
+        .stderr(std::process::Stdio::piped()); // Capture stderr for debugging
+        
+    child.kill_on_drop(true);
+    
+    let child = child.spawn()?;
 
     emit(RpcEvent::Log {
         id: id.into(),
@@ -919,6 +955,9 @@ pub async fn probe(id: &str, input: &str, mut emit: impl FnMut(RpcEvent)) -> any
     let mut video = false;
     let mut audio_codec = None;
     let mut audio_bitrate = None;
+    let mut color_space = None;
+    let mut color_transfer = None;
+    let mut color_primaries = None;
 
     // Analyze each stream in the file
     if let Some(arr) = v.get("streams").and_then(|s| s.as_array()) {
@@ -942,6 +981,11 @@ pub async fn probe(id: &str, input: &str, mut emit: impl FnMut(RpcEvent)) -> any
                                 .and_then(|x| x.as_str())
                                 .and_then(|s| s.parse::<f64>().ok());
                         }
+
+                        // Extract color metadata
+                        color_space = st.get("color_space").and_then(|x| x.as_str()).map(|s| s.to_string());
+                        color_transfer = st.get("color_transfer").and_then(|x| x.as_str()).map(|s| s.to_string());
+                        color_primaries = st.get("color_primaries").and_then(|x| x.as_str()).map(|s| s.to_string());
                     },
                     "audio" => {
                         audio = true;
@@ -959,7 +1003,27 @@ pub async fn probe(id: &str, input: &str, mut emit: impl FnMut(RpcEvent)) -> any
     }
 
     emit(RpcEvent::Progress { id: id.into(), status: "Probe complete".into(), progress: 1.0 });
-    Ok(ProbeResult { duration, width, height, fps, audio, video, audio_codec, audio_bitrate })
+    Ok(ProbeResult { duration, width, height, fps, audio, video, audio_codec, audio_bitrate, color_space, color_transfer, color_primaries })
+}
+
+/// Check if video is HDR based on probe result
+pub fn is_hdr(probe: &ProbeResult) -> bool {
+    // Check for common HDR transfer characteristics
+    if let Some(transfer) = &probe.color_transfer {
+        let t = transfer.to_lowercase();
+        if t == "smpte2084" || t == "arib-std-b67" {
+            return true;
+        }
+    }
+
+    // Check for BT.2020 color primaries (often implies HDR/WCG)
+    if let Some(primaries) = &probe.color_primaries {
+        if primaries.to_lowercase().contains("bt2020") {
+            return true;
+        }
+    }
+
+    false
 }
 
 

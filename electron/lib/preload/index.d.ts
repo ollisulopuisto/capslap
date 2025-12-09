@@ -26,7 +26,7 @@ declare global {
     api: typeof api
     rust: {
       openFiles: (filters?: any) => Promise<string[] | null>
-      call: (method: string, params: any) => Promise<any>
+      call: (method: string, params: any, requestId?: string) => Promise<any>
       onProgress: (cb: (p: any) => void) => () => void
       getFilePath: (file: File) => string | null
       downloadModel: (model: WhisperModel) => Promise<DownloadModelResult>
