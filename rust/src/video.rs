@@ -95,11 +95,11 @@ pub enum TargetAR {
     AR1x1
 }
 
-fn round_even(x: u32) -> u32 {
+pub fn round_even(x: u32) -> u32 {
     (x & !1) + (x & 1) // ensure even for yuv420
 }
 
-fn ar_wh(ar: TargetAR) -> (u32, u32) {
+pub fn ar_wh(ar: TargetAR) -> (u32, u32) {
     match ar {
         TargetAR::AR9x16 => (9, 16),
         TargetAR::AR16x9 => (16, 9),
@@ -181,73 +181,81 @@ pub fn build_fitpad_filter(target_w: u32, target_h: u32, subtitle_path: Option<&
     build_fitpad_filter_with_format(target_w, target_h, subtitle_path, HardwareEncoder::Software)
 }
 
-/// Build optimized video filter with encoder-specific format optimization
-/// VideoToolbox: ends with NV12 to avoid hidden swscale conversions
-/// Others: ends with yuv420p for broad compatibility
+// / Build optimized video filter with encoder-specific format optimization
+// / VideoToolbox: ends with NV12 to avoid hidden swscale conversions
+// / Others: ends with yuv420p for broad compatibility
 pub fn build_fitpad_filter_with_format(
     target_w: u32,
     target_h: u32,
     subtitle_path: Option<&str>,
     encoder: HardwareEncoder
 ) -> String {
-    // Pre-calculate approximate capacity to avoid reallocations
-    let has_subtitles = subtitle_path.is_some();
-    let estimated_capacity = if has_subtitles {
-        200 + subtitle_path.map(|p| p.len()).unwrap_or(0) // ~200 chars + subtitle path length
-    } else {
-        120 // Without subtitles, much shorter
-    };
-
-    let mut result = String::with_capacity(estimated_capacity);
-    let mut first = true;
-
-    // Helper to add filter with comma separator
-    let mut add_filter = |filter: &str| {
-        if !first {
-            result.push(',');
-        }
-        result.push_str(filter);
-        first = false;
-    };
-
-    // Start with high-quality chroma for subtitle rendering (if needed)
-    if has_subtitles {
-        add_filter("format=yuv444p");
-    }
-
-    // High-quality scaling with letterboxing - BEFORE subtitles for final resolution text
-    add_filter(&format!(
-        "scale={}:{}:flags=lanczos:force_original_aspect_ratio=decrease",
-        target_w, target_h
-    ));
-
-    // Pad to exact target dimensions with black bars - BEFORE subtitles
-    add_filter(&format!(
-        "pad={}:{}:(ow-iw)/2:(oh-ih)/2:black",
-        target_w, target_h
-    ));
-
-    if let Some(subtitle_path) = subtitle_path {
-        let escaped_path = escape_subtitle_path(subtitle_path);
-        // Get fonts directory (development or bundled)
-        if let Some(fonts_dir) = get_fonts_dir() {
-            add_filter(&format!("subtitles={}:fontsdir={}", escaped_path, fonts_dir.display()));
-        } else {
-            // No fontsdir specified - libass will use system fonts
-            add_filter(&format!("subtitles={}", escaped_path));
-        }
-    }
-
-    // End with encoder-optimized format to avoid hidden conversions
-    let final_format = match encoder {
-        HardwareEncoder::VideoToolbox => "nv12",  // VideoToolbox optimization
-        HardwareEncoder::Nvenc => "nv12",        // NVENC also prefers NV12
-        HardwareEncoder::Software => "yuv420p",  // libx264 broad compatibility
-    };
-    add_filter(&format!("format={}", final_format));
-
-    result
+    // Legacy support wrapper
+    build_fitpad_filter_with_options(target_w, target_h, subtitle_path, encoder, "fit")
 }
+
+// / Extended filter builder with crop strategy support
+pub fn build_fitpad_filter_with_options(
+    target_w: u32,
+    target_h: u32,
+    subtitle_path: Option<&str>,
+    encoder: HardwareEncoder,
+    crop_strategy: &str
+) -> String {
+    let mut filters = Vec::new();
+
+    // 1. Scaling Strategy
+    if crop_strategy == "fill" {
+        // "Fill" / "Center Crop" strategy:
+        // Scale input so it COVERS the target area (keeping aspect ratio), then crop the center.
+        // Formula: scale=w=TARGET_W:h=TARGET_H:force_original_aspect_ratio=increase,crop=TARGET_W:TARGET_H
+        filters.push(format!(
+            "scale=w={}:h={}:force_original_aspect_ratio=increase",
+            target_w, target_h
+        ));
+        filters.push(format!("crop={}:{}:(iw-ow)/2:(ih-oh)/2", target_w, target_h));
+    } else {
+        // "Fit" / "Letterbox" strategy (default):
+        // Scale input so it FITS within the target area (keeping aspect ratio), then pad with black bars.
+        // Formula: scale=w=TARGET_W:h=TARGET_H:force_original_aspect_ratio=decrease,pad=TARGET_W:TARGET_H:(ow-iw)/2:(oh-ih)/2:black
+        filters.push(format!(
+            "scale={}:{}:flags=lanczos:force_original_aspect_ratio=decrease",
+            target_w, target_h
+        ));
+        filters.push(format!(
+            "pad={}:{}:(ow-iw)/2:(oh-ih)/2:black",
+            target_w, target_h
+        ));
+    }
+
+    // 2. Tonemapping (HDR -> SDR)
+    filters.push("tonemap=hable:desat=0".to_string());
+
+    // 3. Subtitles
+    if let Some(path) = subtitle_path {
+        let escaped_path = escape_subtitle_path(path);
+        filters.push(format!("ass={}", escaped_path));
+    }
+
+    // 3. Encoder-specific format optimization
+    match encoder {
+        HardwareEncoder::VideoToolbox => {
+            // VideoToolbox prefers NV12
+            filters.push("format=nv12".to_string());
+        },
+        HardwareEncoder::Nvenc => {
+            // NVENC also prefers NV12
+            filters.push("format=nv12".to_string());
+        },
+        HardwareEncoder::Software => {
+            // Software (x264) generic compatibility
+            filters.push("format=yuv420p".to_string());
+        }
+    }
+
+    filters.join(",")
+}
+
 
 /// Determine the best audio codec and settings based on input analysis
 /// Returns (codec, additional_args) tuple
@@ -416,16 +424,22 @@ pub enum HardwareEncoder {
     Software,
 }
 
-/// Convert CRF value (0-51) to VideoToolbox quality (0-100)
+/// Convert CRF value (0-51) to VideoToolbox bitrate string
 /// CRF scale: 0=lossless, 18=visually lossless, 23=default, 51=worst
-/// VideoToolbox scale: 0=worst, 50=medium, 100=best
-fn crf_to_videotoolbox_quality(crf: &str) -> String {
+/// we map these to reasonable fixed bitrates for hardware encoding
+fn crf_to_bitrate(crf: &str) -> String {
     if let Ok(crf_value) = crf.parse::<i32>() {
-        // Invert and scale: CRF 18 -> ~75, CRF 23 -> ~60, CRF 28 -> ~45
-        let quality = 100 - ((crf_value as f32 * 100.0) / 51.0) as i32;
-        quality.max(0).min(100).to_string()
+        if crf_value < 20 {
+            "12M".to_string()  // High quality
+        } else if crf_value < 24 {
+            "8M".to_string()   // Standard quality (default)
+        } else if crf_value < 28 {
+            "6M".to_string()   // Medium quality
+        } else {
+            "4M".to_string()   // Low quality
+        }
     } else {
-        "65".to_string() // Fallback to medium-high quality
+        "8M".to_string() // Fallback to standard quality
     }
 }
 
@@ -441,10 +455,11 @@ pub fn configure_hardware_encoder_args(
     match encoder {
         HardwareEncoder::VideoToolbox => {
             // VideoToolbox H.264 encoder for macOS hardware acceleration
-            // Note: VideoToolbox uses -q:v with 0-100 scale (higher=better), not CRF
-            let quality = crf_to_videotoolbox_quality(crf);
+            // Note: VideoToolbox in this ffmpeg build doesn't support -q:v
+            // We use -b:v (bitrate) instead as requested/verified
+            let bitrate = crf_to_bitrate(crf);
             cmd.arg("-c:v").arg("h264_videotoolbox")
-               .arg("-q:v").arg(&quality)               // Quality setting (0-100, ~60-80 for good quality)
+               .arg("-b:v").arg(&bitrate)               // Bitrate setting (e.g. "8M")
                .arg("-allow_sw").arg("1")               // Allow software fallback if hardware fails
                .arg("-g").arg(gop_size_str)             // GOP size for seeking
                .arg("-pix_fmt").arg("nv12");            // VideoToolbox prefers NV12
@@ -487,10 +502,10 @@ pub fn get_hardware_encoder_args(
 ) -> Vec<String> {
     let mut args = match encoder {
         HardwareEncoder::VideoToolbox => {
-            let quality = crf_to_videotoolbox_quality(crf);
+            let bitrate = crf_to_bitrate(crf);
             vec![
                 "-c:v".to_string(), "h264_videotoolbox".to_string(),
-                "-q:v".to_string(), quality,                      // Quality setting (0-100, converted from CRF)
+                "-b:v".to_string(), bitrate,                      // Bitrate setting
                 "-allow_sw".to_string(), "1".to_string(),
                 "-g".to_string(), gop_size_str.to_string(),
                 "-pix_fmt".to_string(), "nv12".to_string(),       // VideoToolbox prefers NV12

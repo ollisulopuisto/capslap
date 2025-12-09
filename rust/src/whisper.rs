@@ -166,6 +166,7 @@ pub async fn transcribe_with_whisper_cpp(
 async fn ensure_whisper_model(model: &str) -> anyhow::Result<(String, String)> {
     // Define fallback chain: requested -> base -> tiny
     let fallback_chain = match model {
+        "turbo" => vec!["turbo", "large", "medium", "base", "tiny"],
         "large" => vec!["large", "medium", "base", "tiny"],
         "medium" => vec!["medium", "base", "tiny"],
         "small" => vec!["small", "base", "tiny"],
@@ -181,6 +182,7 @@ async fn ensure_whisper_model(model: &str) -> anyhow::Result<(String, String)> {
             "small" => "ggml-small.bin",
             "medium" => "ggml-medium.bin",
             "large" => "ggml-large-v3.bin",
+            "turbo" => "ggml-large-v3-turbo.bin",
             _ => continue,
         };
 
@@ -603,7 +605,8 @@ pub async fn download_model_rpc(
         "small" => "ggml-small.bin",
         "medium" => "ggml-medium.bin",
         "large" => "ggml-large-v3.bin",
-        _ => return Err(anyhow::anyhow!("Unknown model: {}. Supported: tiny, base, small, medium, large", params.model))
+        "turbo" => "ggml-large-v3-turbo.bin",
+        _ => return Err(anyhow::anyhow!("Unknown model: {}. Supported: tiny, base, small, medium, large, turbo", params.model))
     };
 
     let url = get_model_download_url(model_filename);
@@ -681,6 +684,7 @@ pub fn check_model_exists(model_name: &str) -> anyhow::Result<bool> {
         "small" => "ggml-small.bin",
         "medium" => "ggml-medium.bin",
         "large" => "ggml-large-v3.bin",
+        "turbo" => "ggml-large-v3-turbo.bin",
         _ => return Ok(false)
     };
 

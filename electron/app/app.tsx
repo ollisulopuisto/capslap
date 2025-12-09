@@ -124,6 +124,8 @@ interface Settings {
   captionStyle: Template['captionStyle']
   captionPosition: 'bottom' | 'center'
   selectedLanguage: string
+  outputSize?: string
+  cropStrategy?: string
 }
 
 const defaultSettings: Settings = {
@@ -138,6 +140,8 @@ const defaultSettings: Settings = {
   captionStyle: 'karaoke',
   captionPosition: 'bottom',
   selectedLanguage: 'en',
+  outputSize: 'original',
+  cropStrategy: 'fit',
 }
 
 const templates: Template[] = [
@@ -397,7 +401,7 @@ export default function App() {
   const [shouldGenerateAfterApiKey, setShouldGenerateAfterApiKey] = useState(false)
 
   useEffect(() => {
-    const savedSettings = localStorage.getItem('settings-v1')
+    const savedSettings = localStorage.getItem('settings-v3')
     const savedApiKey = localStorage.getItem('api-key-v1')
 
     if (savedApiKey) {
@@ -405,15 +409,22 @@ export default function App() {
     }
 
     if (savedSettings) {
-      const cachedVideoSettings: Settings = JSON.parse(savedSettings)
-      setVideoSettings(cachedVideoSettings)
+      try {
+        const cachedVideoSettings: Settings = JSON.parse(savedSettings)
+        setVideoSettings({ ...defaultSettings, ...cachedVideoSettings })
+      } catch (e) {
+        console.error('Failed to parse settings', e)
+        setVideoSettings(defaultSettings)
+      }
+    } else {
+      setVideoSettings(defaultSettings)
     }
     setIsLoaded(true)
   }, [])
 
   useEffect(() => {
     if (!isLoaded) return
-    localStorage.setItem('settings-v1', JSON.stringify(videoSettings))
+    localStorage.setItem('settings-v3', JSON.stringify(videoSettings))
   }, [videoSettings, isLoaded])
 
   const updateSettings = (updates: Partial<Settings>) => {
@@ -492,6 +503,12 @@ export default function App() {
     try {
       setIsGenerating(true)
 
+      console.log('Generating captions with settings:', {
+        exportFormats: videoSettings.exportFormats,
+        outputSize: videoSettings.outputSize,
+        cropStrategy: videoSettings.cropStrategy
+      })
+
       const results = await Promise.allSettled(
         selectedVideos.map(async (video) =>
           window.rust.call('generateCaptions', {
@@ -508,6 +525,8 @@ export default function App() {
             outlineColor: videoSettings.outlineColor,
             glowEffect: videoSettings.glowEffect,
             position: videoSettings.captionPosition,
+            outputSize: videoSettings.outputSize,
+            cropStrategy: videoSettings.cropStrategy,
             apiKey: apiKey,
           })
         )
@@ -753,6 +772,7 @@ export default function App() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="en">English</SelectItem>
+                        <SelectItem value="fi">Suomi (Finnish)</SelectItem>
                         <SelectItem value="ar">العربية (Arabic)</SelectItem>
                         <SelectItem value="es">Español (Spanish)</SelectItem>
                         <SelectItem value="fr">Français (French)</SelectItem>
@@ -789,6 +809,40 @@ export default function App() {
                     </Select>
                   </div>
                   {/* </div> */}
+
+                  <div className="space-y-3">
+                    <label className="text-xs text-muted-foreground mb-1 block">Output Size</label>
+                    <Select
+                      value={videoSettings.outputSize || 'original'}
+                      onValueChange={(value) => updateSettings({ outputSize: value })}
+                    >
+                      <SelectTrigger className="w-full h-8 text-xs">
+                        <SelectValue placeholder="Resolution" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="original">Original (Source)</SelectItem>
+                        <SelectItem value="4k">4K (UHD)</SelectItem>
+                        <SelectItem value="1080p">1080p (FHD)</SelectItem>
+                        <SelectItem value="720p">720p (HD)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="text-xs text-muted-foreground mb-1 block">Crop Mode</label>
+                    <Select
+                      value={videoSettings.cropStrategy || 'fit'}
+                      onValueChange={(value) => updateSettings({ cropStrategy: value })}
+                    >
+                      <SelectTrigger className="w-full h-8 text-xs">
+                        <SelectValue placeholder="Strategy" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="fit">Fit (Letterbox)</SelectItem>
+                        <SelectItem value="fill">Fill (Center Crop)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
 
                   <div className="flex items-center justify-between">
                     <label className="text-xs text-muted-foreground">Glow Effect</label>

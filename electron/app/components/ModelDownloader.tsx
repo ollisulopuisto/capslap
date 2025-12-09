@@ -11,6 +11,7 @@ const MODEL_INFO: ModelInfo[] = [
   { name: 'small', size: '488 MB', downloaded: false },
   { name: 'medium', size: '1.5 GB', downloaded: false },
   { name: 'large', size: '3.1 GB', downloaded: false },
+  { name: 'turbo', size: '1.6 GB', downloaded: false },
 ]
 
 export function ModelDownloader({
@@ -101,12 +102,11 @@ export function ModelDownloader({
                     className={`
                       group relative flex items-center justify-between p-3 border rounded-lg transition-all duration-200
                       ${isSelected ? 'border-primary/70 bg-primary/10 shadow-sm' : 'border-border/50'}
-                      ${
-                        canSelect && !isDownloading
-                          ? 'cursor-pointer hover:border-primary/70'
-                          : isDownloading
-                            ? 'cursor-wait'
-                            : 'cursor-not-allowed opacity-70'
+                      ${canSelect && !isDownloading
+                        ? 'cursor-pointer hover:border-primary/70'
+                        : isDownloading
+                          ? 'cursor-wait'
+                          : 'cursor-not-allowed opacity-70'
                       }
                     `}
                   >

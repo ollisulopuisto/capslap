@@ -126,6 +126,10 @@ pub struct GenerateCaptionsParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<String>,         // Caption position: "bottom" or "center"
     pub api_key: Option<String>,         // OpenAI API key
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_size: Option<String>,     // Target output size (e.g., "1080p", "original")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crop_strategy: Option<String>,   // "start", "center", "end", "fit" (letterbox)
 }
 
 #[derive(Serialize, Deserialize, Debug)]

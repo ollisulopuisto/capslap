@@ -62,6 +62,8 @@ pub async fn generate_captions_single_pass(
         params.glow_effect,
         params.karaoke,
         params.position,
+        params.output_size,
+        params.crop_strategy,
         &mut emit
     ).await?;
 
@@ -87,11 +89,19 @@ async fn optimized_multi_format_encode(
     glow_effect: bool,
     karaoke: bool,
     position: Option<String>,
+    output_size: Option<String>,
+    crop_strategy: Option<String>,
     emit: &mut impl FnMut(RpcEvent)
 ) -> Result<Vec<CaptionedVideoResult>> {
     if export_formats.is_empty() {
         return Err(anyhow!("No export formats specified"));
     }
+
+    emit(RpcEvent::Log {
+        id: id.into(),
+        message: format!("Export params: OutputSize={:?}, CropStrategy={:?}, Formats={:?}",
+            output_size, crop_strategy, export_formats)
+    });
 
     let input_path = std::path::Path::new(input_video)
         .with_extension("")
@@ -104,7 +114,52 @@ async fn optimized_multi_format_encode(
         let target_ar = crate::video::parse_target_ar(format)?;
         let src_w = probe_result.width.unwrap_or(1920) as u32;
         let src_h = probe_result.height.unwrap_or(1080) as u32;
-        let (target_w, target_h) = crate::video::canvas_no_downscale(src_w, src_h, target_ar);
+
+        // Determine target dimensions based on output_size or aspect ratio
+        let (target_w, target_h) = if let Some(size) = &output_size {
+            let (base_w, base_h) = crate::video::ar_wh(target_ar);
+            let ar = base_w as f64 / base_h as f64;
+
+            match size.as_str() {
+                "1080p" => {
+                    // Logic: 
+                    // If Landscape (w > h): H=1080, W=1080*AR
+                    // If Portrait (h > w):  W=1080, H=1080/AR
+                    // If Square: 1080x1080
+                    if base_w > base_h {
+                        let w = (1080.0 * ar).round() as u32;
+                        (crate::video::round_even(w), 1080)
+                    } else {
+                        let h = (1080.0 / ar).round() as u32;
+                        (1080, crate::video::round_even(h))
+                    }
+                },
+                "720p" => {
+                    if base_w > base_h {
+                        let w = (720.0 * ar).round() as u32;
+                        (crate::video::round_even(w), 720)
+                    } else {
+                        let h = (720.0 / ar).round() as u32;
+                        (720, crate::video::round_even(h))
+                    }
+                },
+                 "4k" | "2160p" => {
+                    // 4K usually refers to 3840x2160 (UHD)
+                    // Landscape: H=2160
+                    // Portrait: W=2160
+                    if base_w > base_h {
+                        let w = (2160.0 * ar).round() as u32;
+                        (crate::video::round_even(w), 2160)
+                    } else {
+                        let h = (2160.0 / ar).round() as u32;
+                        (2160, crate::video::round_even(h))
+                    }
+                },
+                _ => crate::video::canvas_no_downscale(src_w, src_h, target_ar)
+            }
+        } else {
+            crate::video::canvas_no_downscale(src_w, src_h, target_ar)
+        };
 
         // Build ASS subtitle file optimized for this format
         let style = default_ass_style(
@@ -137,6 +192,7 @@ async fn optimized_multi_format_encode(
         let semaphore = semaphore.clone();
         let task_id = format!("{}_{}", id, idx);
         let input_path = input_path.clone();
+        let crop_strat = crop_strategy.clone().unwrap_or_else(|| "fit".to_string());
 
         let task = tokio::spawn(async move {
             // Acquire semaphore permit for bounded concurrency
@@ -153,6 +209,7 @@ async fn optimized_multi_format_encode(
                 &captioned_path,
                 target_w,
                 target_h,
+                &crop_strat,
                 &probe_result,
             ).await?;
 
@@ -186,6 +243,7 @@ async fn optimized_single_format_encode(
     output_path: &str,
     target_w: u32,
     target_h: u32,
+    crop_strategy: &str,
     probe_result: &crate::video::ProbeResult,
 ) -> Result<()> {
     // Determine the best available hardware encoder for H.264 first (for filter optimization)
@@ -199,6 +257,7 @@ async fn optimized_single_format_encode(
         output_path,
         target_w,
         target_h,
+        crop_strategy,
         probe_result,
         hardware_encoder,
     ).await;
@@ -212,6 +271,7 @@ async fn optimized_single_format_encode(
             output_path,
             target_w,
             target_h,
+            crop_strategy,
             probe_result,
             crate::video::HardwareEncoder::Software,
         ).await;
@@ -228,13 +288,20 @@ async fn try_encode_with_encoder(
     output_path: &str,
     target_w: u32,
     target_h: u32,
+    crop_strategy: &str,
     probe_result: &crate::video::ProbeResult,
     hardware_encoder: crate::video::HardwareEncoder,
 ) -> Result<()> {
     // Build optimized filter with format conversion AND subtitles in one pass
     // Use encoder-specific format optimization (NV12 for VideoToolbox/NVENC, yuv420p for software)
     let ass = ass_path.to_string_lossy().to_string();
-    let vf = crate::video::build_fitpad_filter_with_format(target_w, target_h, Some(&ass), hardware_encoder);
+    let vf = crate::video::build_fitpad_filter_with_options(
+        target_w,
+        target_h,
+        Some(&ass),
+        hardware_encoder,
+        crop_strategy
+    );
 
     // Determine optimal audio codec and settings
     let (audio_codec, audio_args) = crate::video::determine_audio_codec(Some(probe_result));
@@ -266,12 +333,13 @@ async fn try_encode_with_encoder(
             // Add hardware-optimized encoding parameters
             match hardware_encoder {
                 crate::video::HardwareEncoder::VideoToolbox => {
-                    // VideoToolbox uses -q:v (0-100 scale) instead of CRF
-                    // CRF 16 is very high quality, so use q:v ~70-75 (higher is better for VideoToolbox)
-                    // Note: pix_fmt is already set in the filter (format=nv12), no need to duplicate
+                    // VideoToolbox in this ffmpeg build doesn't support -q:v
+                    // We use -b:v (bitrate) instead.
+                    // CRF 16 equivalent is roughly usually 10-12Mbps for 1080p, scaling accordingly.
+                    // Since specific bitrate control is robust, we use a high bitrate.
                     args.extend_from_slice(&[
                         "-c:v", "h264_videotoolbox",
-                        "-q:v", "72",                 // Quality setting (0-100, higher=better)
+                        "-b:v", "12M",                // High quality target (matching software CRF 16 intent)
                         "-allow_sw", "1",             // Allow software fallback
                         "-g", &gop_size_str,
                     ]);
