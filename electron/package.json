@@ -8,8 +8,12 @@
   },
   "name": "capslap",
   "main": "./out/main/main.js",
+  "engines": {
+    "node": "^18.0.0 || ^20.0.0 || >=22.0.0"
+  },
   "scripts": {
-    "dev": "electron-vite dev -w",
+    "dev": "npm run build:rust && electron-vite dev -w",
+    "build:rust": "cd ../rust && cargo build",
     "format": "prettier --write .",
     "start": "electron-vite preview",
     "postinstall": "electron-builder install-app-deps && bash ../scripts/download-ffmpeg.sh || true",

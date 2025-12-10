@@ -2,6 +2,9 @@ use core::rpc::{RpcRequest, RpcResponse, RpcError, RpcEvent, new_id};
 use core::captions;
 use std::io::{self, BufRead, Write};
 
+// Shared cancellation map: request_id -> cancellation_sender
+type CancelMap = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, tokio::sync::broadcast::Sender<()>>>>;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Install panic hook to diagnose silent crashes
@@ -20,6 +23,7 @@ async fn main() -> anyhow::Result<()> {
 
     let stdin = io::stdin();
     let mut tasks = tokio::task::JoinSet::new();
+    let cancel_map: CancelMap = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
     for line in stdin.lock().lines() {
         let line = line?;
@@ -28,9 +32,10 @@ async fn main() -> anyhow::Result<()> {
         let req: Result<RpcRequest, _> = serde_json::from_str(&line);
         match req {
             Ok(r) => {
+                let cancel_map = cancel_map.clone();
                 // Spawn each request as a concurrent task
                 tasks.spawn(async move {
-                    handle_request(r).await
+                    handle_request(r, cancel_map).await
                 });
             }
             Err(e) => {
@@ -46,7 +51,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_request(r: RpcRequest) {
+async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
     let id = r.id.clone();
 
     // Emit progress/log events — no captured stdout handle.
@@ -67,22 +72,74 @@ async fn handle_request(r: RpcRequest) {
         let _ = io::stdout().flush();
     };
 
+    // Setup cancellation token for this request
+    let (tx, mut rx) = tokio::sync::broadcast::channel(1);
+    {
+        let mut map = cancel_map.lock().unwrap();
+        map.insert(id.clone(), tx);
+    }
+    
+    // Ensure cleanup of cancellation token on drop
+    struct CleanupGuard {
+        id: String,
+        map: CancelMap,
+    }
+    impl Drop for CleanupGuard {
+        fn drop(&mut self) {
+            let mut map = self.map.lock().unwrap();
+            map.remove(&self.id);
+        }
+    }
+    let _guard = CleanupGuard { id: id.clone(), map: cancel_map.clone() };
+
     match r.method.as_str() {
         "ping" => write_ok(serde_json::json!({"ok": true})),
+        "cancel" => {
+            // New cancel method
+            if let Some(target_id) = r.params.as_str() {
+                 let map = cancel_map.lock().unwrap();
+                 if let Some(tx) = map.get(target_id) {
+                     let _ = tx.send(()); // Send cancellation signal
+                     write_ok(serde_json::json!({ "cancelled": true }));
+                 } else {
+                     write_err(format!("Task with id {} not found", target_id));
+                 }
+            } else {
+                write_err("Invalid params for cancel, expected string id".to_string());
+            }
+        }
         "generateCaptions" => {
             match serde_json::from_value::<core::types::GenerateCaptionsParams>(r.params) {
-                Ok(p) => match captions::generate_captions(&id, p, &mut emit).await {
-                    Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
-                    Err(e) => write_err(e.to_string()),
+                Ok(p) => {
+                    tokio::select! {
+                        res = captions::generate_captions(&id, p, &mut emit) => {
+                            match res {
+                                Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
+                                Err(e) => write_err(e.to_string()),
+                            }
+                        }
+                        _ = rx.recv() => {
+                            write_err("Cancelled".to_string());
+                        }
+                    }
                 },
                 Err(e) => write_err(format!("Invalid params for generateCaptions: {}", e)),
             }
         }
         "downloadModel" => {
             match serde_json::from_value::<core::types::DownloadModelParams>(r.params) {
-                Ok(p) => match core::whisper::download_model_rpc(&id, p, &mut emit).await {
-                    Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
-                    Err(e) => write_err(e.to_string()),
+                Ok(p) => {
+                     tokio::select! {
+                        res = core::whisper::download_model_rpc(&id, p, &mut emit) => {
+                             match res {
+                                Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
+                                Err(e) => write_err(e.to_string()),
+                            }
+                        }
+                        _ = rx.recv() => {
+                             write_err("Cancelled".to_string());
+                        }
+                     }
                 },
                 Err(e) => write_err(format!("Invalid params for downloadModel: {}", e)),
             }
@@ -94,6 +151,66 @@ async fn handle_request(r: RpcRequest) {
                     Err(e) => write_err(e.to_string()),
                 },
                 Err(e) => write_err(format!("Invalid params for checkModelExists: {}", e)),
+            }
+        }
+        "extractFirstFrame" => {
+            match serde_json::from_value::<core::types::ExtractFirstFrameParams>(r.params) {
+                Ok(p) => match core::video::extract_first_frame(&p.video_path) {
+                    Ok(base64_img) => write_ok(serde_json::to_value(core::types::ExtractFirstFrameResult { image_data: base64_img }).unwrap()),
+                    Err(e) => write_err(e.to_string()),
+                },
+                Err(e) => write_err(format!("Invalid params for extractFirstFrame: {}", e)),
+            }
+        }
+        "transcribe" => {
+            match serde_json::from_value::<core::types::GenerateCaptionsParams>(r.params) {
+                Ok(p) => {
+                    tokio::select! {
+                        res = captions::extract_and_transcribe(
+                            &id,
+                            &p.input_video,
+                            p.split_by_words,
+                            p.model,
+                            p.language,
+                            p.api_key,
+                            p.prompt,
+                            &mut emit
+                        ) => {
+                            match res {
+                                Ok((probe, audio, transcription)) => {
+                                    write_ok(serde_json::json!({
+                                        "probeResult": probe,
+                                        "audioFile": audio,
+                                        "transcription": transcription
+                                    }));
+                                },
+                                Err(e) => write_err(e.to_string()),
+                            }
+                        }
+                        _ = rx.recv() => {
+                            write_err("Cancelled".to_string());
+                        }
+                    }
+                },
+                Err(e) => write_err(format!("Invalid params for transcribe: {}", e)),
+            }
+        }
+        "burn" => {
+            match serde_json::from_value::<core::types::BurnCaptionsParams>(r.params) {
+                Ok(p) => {
+                    tokio::select! {
+                        res = captions::burn_captions_with_segments(&id, p, &mut emit) => {
+                            match res {
+                                Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
+                                Err(e) => write_err(e.to_string()),
+                            }
+                        }
+                        _ = rx.recv() => {
+                            write_err("Cancelled".to_string());
+                        }
+                    }
+                },
+                Err(e) => write_err(format!("Invalid params for burn: {}", e)),
             }
         }
         _ => write_err(format!("Unknown method: {}", r.method)),

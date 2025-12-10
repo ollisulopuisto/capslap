@@ -143,6 +143,30 @@ pub struct GenerateCaptionsResult {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct BurnCaptionsParams {
+    pub input_video: String,              // Path to input video file
+    pub segments: Vec<CaptionSegment>,    // The edited segments to burn
+    pub export_formats: Vec<String>,      // List of aspect ratios to export
+    pub karaoke: bool,                    // Whether to use karaoke-style highlighting
+    pub font_name: Option<String>,        // Font name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_color: Option<String>,       // Text color
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub highlight_word_color: Option<String>, // Highlight word color
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outline_color: Option<String>,    // Outline color
+    #[serde(default)]
+    pub glow_effect: bool,                // Whether to apply glow effect
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,         // Caption position
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_size: Option<String>,     // Target output size
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crop_strategy: Option<String>,   // Crop strategy
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct CaptionedVideoResult {
     pub format: String,                   // The aspect ratio format (e.g., "9:16")
     pub raw_video: String,                // Path to reformatted video without captions
@@ -164,4 +188,17 @@ pub struct DownloadModelResult {
     pub model: String,                    // Model name that was downloaded
     pub path: String,                     // Path where model was saved
     pub size: u64,                        // Downloaded file size in bytes
+}
+
+// Frame extraction types
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractFirstFrameParams {
+    pub video_path: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractFirstFrameResult {
+    pub image_data: String, // Base64 encoded image
 }

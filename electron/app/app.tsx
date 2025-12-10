@@ -7,6 +7,7 @@ import { Upload, Film, Download, Cog, Trash, Zap, Settings, FileVideo, Key, Pale
 import { cn } from '@/lib/utils'
 import { TitleBar } from './components/TitleBar'
 import { ModelDownloader } from './components/ModelDownloader'
+import { CaptionEditor, CaptionSegment } from './components/CaptionEditor'
 import {
   Dialog,
   DialogContent,
@@ -234,12 +235,53 @@ function TemplatePreviewCard({
   template,
   isSelected,
   onSelect,
+  previewFrame, // New prop
 }: {
   template: Template
   isSelected: boolean
   onSelect: () => void
+  previewFrame?: string | null // Base64 image data
 }) {
   const [isHovered, setIsHovered] = React.useState(false)
+
+  // Function to render the styled caption preview
+  const renderCaptionPreview = () => {
+    // Basic style mapping - this is a simplified version of what the backend does
+    const baseStyle = {
+      fontFamily: template.font,
+      color: template.textColor,
+      WebkitTextStroke: template.outlineColor ? `2px ${template.outlineColor}` : 'none',
+      textShadow: template.glowEffect ? `0 0 10px ${template.highlightWordColor}` : 'none',
+    }
+
+    // Different layouts based on position
+    const positionClass = cn(
+      "absolute left-0 right-0 text-center px-4",
+      template.position === 'bottom' && "bottom-8",
+      template.position === 'center' && "top-1/2 -translate-y-1/2",
+      template.position === 'safe-center' && "top-1/2 -translate-y-1/2" // Simplified for preview
+    )
+
+    return (
+      <div className={positionClass}>
+        <div className="flex flex-col items-center justify-center gap-1">
+          <span
+            style={baseStyle}
+            className="text-lg font-bold leading-tight break-words max-w-full"
+          >
+            LOREM IPSUM
+          </span>
+          <span
+            style={{ ...baseStyle, color: template.highlightWordColor }}
+            className="text-lg font-bold leading-tight break-words max-w-full"
+          >
+            DOLOR SIT AMET
+          </span>
+        </div>
+      </div>
+    )
+  }
+
 
   return (
     <div
@@ -258,23 +300,36 @@ function TemplatePreviewCard({
       <div className="flex flex-col h-full">
         {/* Video Preview with 9:16 aspect ratio */}
         <div className="relative w-full" style={{ aspectRatio: '9/16' }}>
-          <video
-            src={template.src || ''}
-            className="w-full h-full object-cover"
-            muted
-            loop
-            playsInline
-            ref={(el) => {
-              if (el) {
-                if (isHovered) {
-                  el.play()
-                } else {
-                  el.pause()
-                  el.currentTime = 0
+          {previewFrame ? (
+            <div className="relative w-full h-full">
+              <img
+                src={previewFrame}
+                className="w-full h-full object-cover"
+                alt="Preview"
+              />
+              {/* Caption Overlay */}
+              {renderCaptionPreview()}
+            </div>
+          ) : (
+            <video
+              src={template.src || ''}
+              className="w-full h-full object-cover"
+              muted
+              loop
+              playsInline
+              ref={(el) => {
+                if (el) {
+                  if (isHovered) {
+                    el.play()
+                  } else {
+                    el.pause()
+                    el.currentTime = 0
+                  }
                 }
-              }
-            }}
-          />
+              }}
+            />
+          )}
+
 
           {/* Overlay for better text visibility */}
           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
@@ -412,6 +467,33 @@ export default function App() {
   const [isApiKeySettingsOpen, setIsApiKeySettingsOpen] = useState(false)
   const [shouldGenerateAfterApiKey, setShouldGenerateAfterApiKey] = useState(false)
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null)
+  const [exportProgress, setExportProgress] = useState(0)
+  const [exportStatus, setExportStatus] = useState('')
+  const [previewFrame, setPreviewFrame] = useState<string | null>(null) // State for extracted frame
+
+  // Editor state
+  const [isEditorOpen, setIsEditorOpen] = useState(false)
+  const [editorSegments, setEditorSegments] = useState<CaptionSegment[]>([])
+  const [editorVideoPath, setEditorVideoPath] = useState<string>('')
+  const [editorJobId, setEditorJobId] = useState<string>('')
+
+
+  useEffect(() => {
+    // Listen for global progress events
+    // We cast window.rust to any because onProgress might not be in the global type definition yet
+    const rust = window.rust as any
+    if (rust && rust.onProgress) {
+      const unsubscribe = rust.onProgress((event: any) => {
+        // Filter events for the current export operation
+        if (event.id === currentRequestId && event.event === 'progress') {
+          setExportProgress(event.progress)
+          setExportStatus(event.status)
+        }
+      })
+      return () => unsubscribe()
+    }
+    return undefined
+  }, [currentRequestId])
 
   useEffect(() => {
     const savedSettings = localStorage.getItem('settings-v3')
@@ -476,6 +558,20 @@ export default function App() {
         }
 
         setSelectedVideos((prev) => [...prev, ...pathsWithoutDuplicates])
+
+        // Extract frame from the first new video
+        if (pathsWithoutDuplicates.length > 0) {
+          const firstVideo = pathsWithoutDuplicates[0]
+          try {
+            // Call backend to extract frame
+            const result = await window.rust.call('extractFirstFrame', { videoPath: firstVideo }) as { imageData: string }
+            if (result && result.imageData) {
+              setPreviewFrame(result.imageData)
+            }
+          } catch (e) {
+            console.error("Failed to extract frame preview", e)
+          }
+        }
       }
     } catch (error) {
       // Silent error handling
@@ -508,6 +604,38 @@ export default function App() {
     }
   }
 
+  const handleBurn = async (segments: CaptionSegment[]) => {
+    setIsEditorOpen(false)
+    setIsGenerating(true)
+    setExportStatus('Burning captions...')
+
+    try {
+      await window.rust.call('burn', {
+        inputVideo: editorVideoPath,
+        segments: segments,
+        exportFormats: videoSettings.exportFormats,
+        karaoke: videoSettings.captionStyle === 'karaoke',
+        fontName: getFontName(videoSettings.selectedFont),
+        textColor: videoSettings.textColor,
+        highlightWordColor: videoSettings.highlightWordColor,
+        outlineColor: videoSettings.outlineColor,
+        glowEffect: videoSettings.glowEffect,
+        position: videoSettings.captionPosition,
+        outputSize: videoSettings.outputSize,
+        cropStrategy: videoSettings.cropStrategy,
+      }, editorJobId)
+
+      toast.success('Video exported successfully!')
+    } catch (error: any) {
+      showErrorToast(error)
+    } finally {
+      setIsGenerating(false)
+      setEditorJobId('')
+      setEditorVideoPath('')
+      setCurrentRequestId(null)
+    }
+  }
+
   const handleGenerate = async () => {
     if (!selectedVideos.length) {
       toast.error('Please select a video first')
@@ -522,67 +650,51 @@ export default function App() {
 
     try {
       setIsGenerating(true)
+      setExportProgress(0)
+      setExportStatus('Transcribing...')
 
-      console.log('Generating captions with settings:', {
-        exportFormats: videoSettings.exportFormats,
-        outputSize: videoSettings.outputSize,
-        cropStrategy: videoSettings.cropStrategy
-      })
-
-
+      console.log('Starting transcription...')
 
       const requestId = crypto.randomUUID()
       setCurrentRequestId(requestId)
+      setEditorJobId(requestId)
 
-      const results = await Promise.allSettled(
-        selectedVideos.map(async (video) =>
-          window.rust.call('generateCaptions', {
-            inputVideo: video,
-            exportFormats: videoSettings.exportFormats,
-            karaoke: videoSettings.captionStyle === 'karaoke',
-            fontName: getFontName(videoSettings.selectedFont),
-            splitByWords: true,
-            model: videoSettings.selectedModel,
-            language: videoSettings.selectedLanguage,
-            prompt: null,
-            textColor: videoSettings.textColor,
-            highlightWordColor: videoSettings.highlightWordColor,
-            outlineColor: videoSettings.outlineColor,
-            glowEffect: videoSettings.glowEffect,
-            position: videoSettings.captionPosition,
-            outputSize: videoSettings.outputSize,
-            cropStrategy: videoSettings.cropStrategy,
-            apiKey: apiKey,
-          }, requestId)
-        )
-      )
+      const video = selectedVideos[0]
+      setEditorVideoPath(video)
 
-      const successful = results.filter((r) => r.status === 'fulfilled')
-      const failed = results.filter((r) => r.status === 'rejected')
-
-      if (successful.length > 0) {
-        toast.success(`Generated ${successful.length} videos successfully!`)
+      if (selectedVideos.length > 1) {
+        toast.info('Batch mode not supported in editor yet. Processing first video only.')
       }
 
-      if (failed.length > 0) {
-        // Группируем ошибки по типам для лучшего UX
-        const errors = failed.map((f) => f.reason)
-        const uniqueErrors = [...new Set(errors.map((err) => err.name || 'UNKNOWN_ERROR'))]
+      const result = await window.rust.call('transcribe', {
+        inputVideo: video,
+        exportFormats: videoSettings.exportFormats,
+        karaoke: videoSettings.captionStyle === 'karaoke',
+        fontName: getFontName(videoSettings.selectedFont),
+        splitByWords: false,
+        model: videoSettings.selectedModel,
+        language: videoSettings.selectedLanguage,
+        prompt: null,
+        textColor: videoSettings.textColor,
+        highlightWordColor: videoSettings.highlightWordColor,
+        outlineColor: videoSettings.outlineColor,
+        glowEffect: videoSettings.glowEffect,
+        position: videoSettings.captionPosition,
+        outputSize: videoSettings.outputSize,
+        cropStrategy: videoSettings.cropStrategy,
+        apiKey: apiKey,
+      }, requestId) as any
 
-        if (uniqueErrors.length === 1) {
-          // Одинаковый тип ошибки для всех файлов
-          const sampleError = errors[0]
-          showErrorToast(sampleError, failed.length)
-        } else {
-          // Different error types
-          toast.error(`Failed to process ${failed.length} videos`, {
-            description: 'Mixed errors occurred. Check settings and try again.',
-          })
-        }
+      if (result && result.transcription && result.transcription.segments) {
+        setEditorSegments(result.transcription.segments)
+        setIsGenerating(false) // Stop spinner, ready for edit
+        setIsEditorOpen(true)
+      } else {
+        throw new Error("No transcription results")
       }
+
     } catch (error: any) {
       showErrorToast(error, 1)
-    } finally {
       setIsGenerating(false)
       setCurrentRequestId(null)
     }
@@ -613,7 +725,8 @@ export default function App() {
     })
   }
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
+
     e.preventDefault()
     e.stopPropagation()
     setIsDragOver(false)
@@ -656,6 +769,20 @@ export default function App() {
         }
 
         setSelectedVideos((prev) => [...prev, ...pathsWithoutDuplicates.filter((path) => path !== null)])
+
+        // Extract frame from the first new video (drag and drop)
+        const validNewPaths = pathsWithoutDuplicates.filter((path) => path !== null)
+        if (validNewPaths.length > 0) {
+          const firstVideo = validNewPaths[0]
+          try {
+            const result = await window.rust.call('extractFirstFrame', { videoPath: firstVideo }) as { imageData: string }
+            if (result && result.imageData) {
+              setPreviewFrame(result.imageData)
+            }
+          } catch (e) {
+            console.error("Failed to extract frame preview", e)
+          }
+        }
       }
     }
   }
@@ -671,6 +798,20 @@ export default function App() {
         onDrop={handleDrop}
       >
         <Toaster />
+
+        {isEditorOpen ? (
+          <div className="absolute inset-0 z-40 bg-background">
+            <CaptionEditor
+              initialSegments={editorSegments}
+              onBurn={handleBurn}
+              onCancel={() => {
+                setIsEditorOpen(false)
+                setEditorJobId('')
+              }}
+              videoPath={editorVideoPath}
+            />
+          </div>
+        ) : null}
 
         {isDragOver && (
           <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
@@ -729,13 +870,28 @@ export default function App() {
 
           <div className="p-4 border-b border-border/50">
             {isGenerating ? (
-              <Button
-                variant="destructive"
-                className="w-full text-white bg-red-500 hover:bg-red-600 shadow-md transition-all duration-200"
-                onClick={handleCancel}
-              >
-                Abort Generation
-              </Button>
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-xs text-muted-foreground font-medium">
+                    <span className="truncate max-w-[70%]">{exportStatus || 'Processing...'}</span>
+                    <span>{Math.round(exportProgress * 100)}%</span>
+                  </div>
+                  <div className="h-2 bg-secondary/50 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary rounded-full transition-all duration-300 ease-out shadow-[0_0_10px_rgba(var(--primary),0.5)]"
+                      style={{ width: `${Math.max(5, exportProgress * 100)}%` }}
+                    />
+                  </div>
+                </div>
+
+                <Button
+                  variant="destructive"
+                  className="w-full text-white bg-red-500 hover:bg-red-600 shadow-md transition-all duration-200"
+                  onClick={handleCancel}
+                >
+                  Abort Generation
+                </Button>
+              </div>
             ) : (
               <div className="text-center text-sm text-muted-foreground">
                 Ready to generate
@@ -757,7 +913,9 @@ export default function App() {
                     template={template}
                     isSelected={videoSettings.selectedTemplate === template.id}
                     onSelect={() => selectTemplate(template)}
+                    previewFrame={previewFrame}
                   />
+
                 ))}
               </div>
             </div>

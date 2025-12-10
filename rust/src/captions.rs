@@ -1,10 +1,92 @@
 use anyhow::{anyhow, Result};
 use crate::rpc::RpcEvent;
-use crate::types::{CaptionSegment, WordSpan, GenerateCaptionsParams, GenerateCaptionsResult, CaptionedVideoResult, ExtractAudioParams, TranscribeSegmentsParams};
+use crate::types::{CaptionSegment, WordSpan, GenerateCaptionsParams, GenerateCaptionsResult, CaptionedVideoResult, ExtractAudioParams, TranscribeSegmentsParams, TranscribeSegmentsResult, BurnCaptionsParams};
 use crate::video::probe;
 use crate::{audio, whisper};
-use std::{fs, path::PathBuf, process::Command};
+use std::{fs, path::PathBuf};
 use std::collections::{HashMap, HashSet, VecDeque};
+use tokio::process::Command as TokioCommand;
+use tokio::io::AsyncBufReadExt;
+use tokio::sync::mpsc;
+
+#[derive(Debug)]
+enum InternalUpdate {
+    Progress { index: usize, value: f32 },
+    Event(RpcEvent),
+}
+
+pub async fn extract_and_transcribe(
+    id: &str,
+    input_video: &str,
+    split_by_words: bool,
+    model: Option<String>,
+    language: Option<String>,
+    api_key: Option<String>,
+    prompt: Option<String>,
+    mut emit: impl FnMut(RpcEvent),
+) -> Result<(crate::video::ProbeResult, String, TranscribeSegmentsResult)> {
+    let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
+    if let Err(e) = fs::create_dir_all(&temp_dir) {
+        return Err(anyhow!("Failed to create temp directory: {}", e));
+    }
+
+    let probe_result = probe(id, input_video, &mut emit).await?;
+
+    let audio_filename = format!("audio_{}.mp3", id);
+    let temp_audio_path = temp_dir.join(&audio_filename);
+    let audio_params = ExtractAudioParams {
+        input: input_video.to_string(),
+        codec: Some("mp3".to_string()),
+        out: Some(temp_audio_path.to_string_lossy().to_string()),
+    };
+    let audio_result = audio::extract_audio(id, audio_params, &mut emit).await?;
+
+    let transcribe_params = TranscribeSegmentsParams {
+        audio: audio_result.audio.clone(),
+        model,
+        language,
+        split_by_words,
+        api_key,
+        prompt,
+        video_file: Some(input_video.to_string()),
+    };
+    let transcription = whisper::transcribe_segments_with_temp(id, transcribe_params, Some(&temp_dir), &mut emit).await?;
+
+    Ok((probe_result, audio_result.audio, transcription))
+}
+
+pub async fn burn_captions_with_segments(
+    id: &str,
+    params: BurnCaptionsParams,
+    mut emit: impl FnMut(RpcEvent)
+) -> Result<Vec<CaptionedVideoResult>> {
+    let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
+    if let Err(e) = fs::create_dir_all(&temp_dir) {
+        return Err(anyhow!("Failed to create temp directory: {}", e));
+    }
+    
+    // We need to re-probe to get video dimensions
+    let probe_result = probe(id, &params.input_video, &mut emit).await?;
+    
+    optimized_multi_format_encode(
+        id,
+        &params.input_video,
+        &params.segments,
+        &params.export_formats,
+        &probe_result,
+        &temp_dir,
+        params.font_name,
+        params.text_color,
+        params.highlight_word_color,
+        params.outline_color,
+        params.glow_effect,
+        params.karaoke,
+        params.position,
+        params.output_size,
+        params.crop_strategy,
+        &mut emit
+    ).await
+}
 
 pub async fn generate_captions(
     id: &str,
@@ -19,34 +101,18 @@ pub async fn generate_captions_single_pass(
     params: GenerateCaptionsParams,
     mut emit: impl FnMut(RpcEvent)
 ) -> Result<GenerateCaptionsResult> {
-
+    
     let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
-    if let Err(e) = fs::create_dir_all(&temp_dir) {
-        return Err(anyhow!("Failed to create temp directory: {}", e));
-    }
-
-    let probe_result = probe(id, &params.input_video, &mut emit).await?;
-
-    let audio_filename = format!("audio_{}.mp3", id);
-    let temp_audio_path = temp_dir.join(&audio_filename);
-    let audio_params = ExtractAudioParams {
-        input: params.input_video.clone(),
-        codec: Some("mp3".to_string()),
-        out: Some(temp_audio_path.to_string_lossy().to_string()),
-    };
-    let audio_result = audio::extract_audio(id, audio_params, &mut emit).await?;
-
-
-    let transcribe_params = TranscribeSegmentsParams {
-        audio: audio_result.audio.clone(),
-        model: params.model,
-        language: params.language,
-        split_by_words: params.split_by_words,
-        api_key: params.api_key.clone(),
-        prompt: params.prompt,
-        video_file: Some(params.input_video.clone()),
-    };
-    let transcription = whisper::transcribe_segments_with_temp(id, transcribe_params, Some(&temp_dir), &mut emit).await?;
+    let (probe_result, audio_file, transcription) = extract_and_transcribe(
+        id,
+        &params.input_video,
+        params.split_by_words,
+        params.model,
+        params.language,
+        params.api_key,
+        params.prompt,
+        &mut emit
+    ).await?;
 
     let captioned_videos = optimized_multi_format_encode(
         id,
@@ -69,7 +135,7 @@ pub async fn generate_captions_single_pass(
 
     Ok(GenerateCaptionsResult {
         probe_result,
-        audio_file: audio_result.audio,
+        audio_file,
         transcription,
         captioned_videos,
     })
@@ -111,6 +177,10 @@ async fn optimized_multi_format_encode(
     // Pre-generate shared ASS files for each format (avoiding redundant subtitle processing)
     let mut format_ass_files = Vec::new();
     for format in export_formats {
+        emit(RpcEvent::Log {
+            id: id.into(),
+            message: format!("Processing format loop for: {}", format)
+        });
         let target_ar = crate::video::parse_target_ar(format)?;
         let src_w = probe_result.width.unwrap_or(1920) as u32;
         let src_h = probe_result.height.unwrap_or(1080) as u32;
@@ -162,6 +232,10 @@ async fn optimized_multi_format_encode(
         };
 
         // Build ASS subtitle file optimized for this format
+        emit(RpcEvent::Log {
+            id: id.into(),
+            message: format!("Building ASS style for format: {}", format)
+        });
         let style = default_ass_style(
             target_w, target_h,
             font_name.as_deref(),
@@ -171,12 +245,24 @@ async fn optimized_multi_format_encode(
             glow_effect,
             position.as_deref()
         );
+        emit(RpcEvent::Log {
+            id: id.into(),
+            message: format!("Building ASS document for format: {}", format)
+        });
         let ass_doc = build_ass_document(target_w, target_h, &style, segments, karaoke, glow_effect)?;
+        emit(RpcEvent::Log {
+            id: id.into(),
+            message: format!("ASS document built for format: {}", format)
+        });
 
         let safe_format = format.replace(':', "x");
         let ass_filename = format!("captions_{}_{}.ass", id, safe_format);
         let ass_path = temp_dir.join(&ass_filename);
         fs::write(&ass_path, ass_doc)?;
+        emit(RpcEvent::Log {
+            id: id.into(),
+            message: format!("ASS file written to: {:?}", ass_path)
+        });
 
         format_ass_files.push((format.clone(), ass_path, target_w, target_h));
     }
@@ -184,6 +270,18 @@ async fn optimized_multi_format_encode(
     // Process formats with limited concurrency (2 at a time for optimal resource usage)
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
     let mut tasks = tokio::task::JoinSet::new();
+    let (tx, mut rx) = mpsc::unbounded_channel::<InternalUpdate>();
+
+    // Track progress of each task
+    let mut task_progress = HashMap::new();
+    let total_tasks = format_ass_files.len();
+
+    // Initial progress event
+    emit(RpcEvent::Progress {
+        id: id.to_string(),
+        status: "Starting export...".to_string(),
+        progress: 0.0,
+    });
 
     for (idx, (format, ass_path, target_w, target_h)) in format_ass_files.into_iter().enumerate() {
         let format = format.clone();
@@ -193,6 +291,7 @@ async fn optimized_multi_format_encode(
         let task_id = format!("{}_{}", id, idx);
         let input_path = input_path.clone();
         let crop_strat = crop_strategy.clone().unwrap_or_else(|| "fit".to_string());
+        let tx = tx.clone();
 
         tasks.spawn(async move {
             // Acquire semaphore permit for bounded concurrency
@@ -211,6 +310,8 @@ async fn optimized_multi_format_encode(
                 target_h,
                 &crop_strat,
                 &probe_result,
+                tx,
+                idx,
             ).await?;
 
             Ok::<CaptionedVideoResult, anyhow::Error>(CaptionedVideoResult {
@@ -223,12 +324,52 @@ async fn optimized_multi_format_encode(
         });
     }
 
-    // Wait for all tasks to complete and collect results
+    // Drop original sender so receiver knows when all senders are done (after tasks finish)
+    drop(tx);
+
     let mut captioned_videos = Vec::new();
-    while let Some(res) = tasks.join_next().await {
-        let result = res.map_err(|e| anyhow!("Task join failed: {}", e))??;
-        captioned_videos.push(result);
+    let mut active = true;
+
+    // Collect results and handle progress
+    while active || !tasks.is_empty() {
+        tokio::select! {
+            Some(res) = tasks.join_next() => {
+                match res {
+                    Ok(Ok(result)) => captioned_videos.push(result),
+                    Ok(Err(e)) => return Err(e), // Task failed
+                    Err(e) => return Err(anyhow!("Task join error: {}", e)),
+                }
+            }
+            Some(update) = rx.recv() => {
+                match update {
+                    InternalUpdate::Progress { index, value } => {
+                        task_progress.insert(index, value);
+                        
+                        let sum: f32 = task_progress.values().sum();
+                        let avg_progress = sum / total_tasks as f32;
+                        
+                        emit(RpcEvent::Progress {
+                            id: id.to_string(),
+                            status: format!("Exporting... ({:.0}%)", avg_progress * 100.0),
+                            progress: avg_progress,
+                        });
+                    },
+                    InternalUpdate::Event(e) => emit(e),
+                }
+            }
+            else => {
+                // Channel closed and tasks empty
+                active = false;
+            }
+        }
     }
+    
+    // Final 100% progress
+    emit(RpcEvent::Progress {
+        id: id.to_string(),
+        status: "Export complete".to_string(),
+        progress: 1.0,
+    });
     
     // Sort results to match input order if needed, but for now just returning collected results
     Ok(captioned_videos)
@@ -244,6 +385,8 @@ async fn optimized_single_format_encode(
     target_h: u32,
     crop_strategy: &str,
     probe_result: &crate::video::ProbeResult,
+    tx: mpsc::UnboundedSender<InternalUpdate>,
+    index: usize,
 ) -> Result<()> {
     // Determine the best available hardware encoder for H.264 first (for filter optimization)
     let hardware_encoder = crate::video::get_best_hardware_encoder().await;
@@ -259,6 +402,8 @@ async fn optimized_single_format_encode(
         crop_strategy,
         probe_result,
         hardware_encoder,
+        tx.clone(),
+        index,
     ).await;
 
     // If hardware encoder failed, try software fallback
@@ -273,6 +418,8 @@ async fn optimized_single_format_encode(
             crop_strategy,
             probe_result,
             crate::video::HardwareEncoder::Software,
+            tx,
+            index,
         ).await;
     }
 
@@ -290,6 +437,8 @@ async fn try_encode_with_encoder(
     crop_strategy: &str,
     probe_result: &crate::video::ProbeResult,
     hardware_encoder: crate::video::HardwareEncoder,
+    tx: mpsc::UnboundedSender<InternalUpdate>,
+    index: usize,
 ) -> Result<()> {
     // Build optimized filter with format conversion AND subtitles in one pass
     // Use encoder-specific format optimization (NV12 for VideoToolbox/NVENC, yuv420p for software)
@@ -320,10 +469,15 @@ async fn try_encode_with_encoder(
         .await
         .map_err(|e| anyhow!("FFmpeg not found: {}", e))?;
 
-    let status = Command::new(&ffmpeg_path)
-        .args({
+    let mut cmd = TokioCommand::new(&ffmpeg_path);
+    cmd.kill_on_drop(true);
+    
+    let duration_us = probe_result.duration.map(|s| (s * 1_000_000.0) as u64);
+
+    cmd.args({
             let mut args = vec![
                 "-y", "-i", input_video,
+                "-progress", "pipe:1",  // Enable progress reporting
                 "-vf", &vf,
                 "-fps_mode", "passthrough",       // Modern replacement for -vsync
                 "-threads", "0",                  // Use all available CPU cores
@@ -383,8 +537,41 @@ async fn try_encode_with_encoder(
                 output_path
             ]);
             args
-        })
-        .status()?;
+        });
+        
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::inherit());
+    
+    // Log intent
+    let _ = tx.send(InternalUpdate::Event(RpcEvent::Log {
+        id: id.into(),
+        message: format!("Starting encoder: {:?}", hardware_encoder)
+    }));
+
+    let mut child = cmd.spawn()?;
+
+    // Process stdout for progress
+    if let Some(stdout) = child.stdout.take() {
+        let reader = tokio::io::BufReader::new(stdout);
+        let mut lines = reader.lines();
+        
+        while let Ok(Some(line)) = lines.next_line().await {
+             if line.starts_with("out_time_us=") {
+                if let Ok(us) = line["out_time_us=".len()..].trim().parse::<u64>() {
+                     let progress = if let Some(total) = duration_us {
+                        if total > 0 {
+                            (us as f64 / total as f64).min(0.99) as f32
+                        } else { 0.0 }
+                    } else { 0.0 };
+
+                    // Send progress update
+                    let _ = tx.send(InternalUpdate::Progress { index, value: progress });
+                }
+            }
+        }
+    }
+
+    let status = child.wait().await?;
 
     if !status.success() {
         let encoder_name = match hardware_encoder {
@@ -461,6 +648,7 @@ struct Phrase {
 
 // Heuristics: new phrase if punctuation on previous token or gap > 350ms or length > 3 words
 fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
+    eprintln!("DEBUG: Entering coalesce_phrases with {} segments", segments.len());
     let mut all: Vec<WordSpan> = Vec::new();
     for s in segments {
         for w in &s.words {
@@ -871,6 +1059,7 @@ fn build_ass_document(
     if segments.is_empty() {
         return Err(anyhow!("No caption segments"));
     }
+    eprintln!("DEBUG: build_ass_document start. karaoke={}, glow={}", karaoke, glow_effect);
 
     let header = format!(
 r#"[Script Info]
@@ -981,6 +1170,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
         let mut hl_state = HighlightState::new(segments);
 
         for (p_idx, phrase) in phrases.iter().enumerate() {
+            eprintln!("DEBUG: Processing phrase {}/{}", p_idx, phrases.len());
             let tokens_upper = normalize_tokens(&phrase.spans);
 
             // Split phrase into segments suitable for the current style
@@ -1118,6 +1308,7 @@ fn default_ass_style(
 // Split text into multiple lines (3-4 lines) for "Storyteller" mode
 // Aim for balanced lines, filling the middle of the screen
 fn split_phrase_multiline(tokens: &[String], spans: &[WordSpan], frame_w: u32, font_px: u32) -> Vec<(Vec<String>, Vec<WordSpan>)> {
+    eprintln!("DEBUG: split_phrase_multiline start. tokens={}", tokens.len());
     let est_char_width = (font_px as f32 * 0.50).max(1.0); // Slightly tighter estimate for packing
     let max_chars_per_line = ((frame_w as f32 * 0.85) / est_char_width).floor() as usize; 
     let max_lines = 4;
@@ -1163,6 +1354,7 @@ fn split_phrase_multiline(tokens: &[String], spans: &[WordSpan], frame_w: u32, f
     let mut current_chunk_lines = 1;
     let mut current_line_len = 0;
     
+    eprintln!("DEBUG: split_phrase_multiline starting loop over {} tokens", tokens.len());
     for (token, span) in tokens.iter().zip(spans.iter()) {
         let token_len = token.len() + 1; // + space
         
@@ -1193,6 +1385,7 @@ fn split_phrase_multiline(tokens: &[String], spans: &[WordSpan], frame_w: u32, f
         segments.push((current_chunk_tokens, current_chunk_spans));
     }
     
+    eprintln!("DEBUG: split_phrase_multiline end. segments={}", segments.len());
     segments
 }
 
@@ -1203,6 +1396,7 @@ fn assemble_multiline(
     font_size: u32,
     max_chars_per_line: usize
 ) -> String {
+    eprintln!("DEBUG: assemble_multiline start. tokens={}", tokens.len());
     // Similar to assemble_colored_two_lines but auto-wraps based on max_chars
     let white = format!("{{\\1c&H{}&\\fs{}}}", white_bgr, font_size);
     // Bigger font for highlight? Maybe not for block text, it might shift layout too much.
@@ -1218,6 +1412,7 @@ fn assemble_multiline(
     let mut line_len = 0;
     
     for (i, token) in tokens.iter().enumerate() {
+        if i % 10 == 0 { eprintln!("DEBUG: assemble_multiline loop i={}", i); }
         let t_clean = token.replace('\\', r"\\").replace('{', r"\{").replace('}', r"\}");
         let t_len = t_clean.len();
         

@@ -1,4 +1,4 @@
-use crate::{types::{CaptionSegment, WhisperResponse, WhisperCacheEntry, WhisperCacheIndex, TranscribeSegmentsParams, TranscribeSegmentsResult, WhisperWord}};
+use crate::{types::{CaptionSegment, WhisperResponse, WhisperCacheEntry, WhisperCacheIndex, TranscribeSegmentsParams, TranscribeSegmentsResult, WhisperWord, WordSpan}};
 use blake3;
 use tokio::fs;
 use tokio::process::Command as TokioCommand;
@@ -935,7 +935,7 @@ pub async fn transcribe_with_ffmpeg_whisper(
 
     let output = cmd.output().await?;
 
-    if !output.status().success() {
+    if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow::anyhow!("FFmpeg Whisper failed: {}", stderr));
     }
@@ -1408,8 +1408,12 @@ pub fn whisper_to_caption_segments(response: &WhisperResponse, split_by_words: b
                 Some(CaptionSegment {
                     start_ms,
                     end_ms,
-                    text,
-                    words: Vec::new(),
+                    text: text.clone(),
+                    words: vec![WordSpan {
+                        start_ms,
+                        end_ms,
+                        text,
+                    }],
                 })
             })
             .collect()
@@ -1472,18 +1476,23 @@ pub fn whisper_to_caption_segments(response: &WhisperResponse, split_by_words: b
                     continue;
                 }
 
+                let word_text = word.to_string();
                 word_segments.push(CaptionSegment {
                     start_ms: word_start_ms,
                     end_ms: word_end_ms,
-                    text: word.to_string(),
-                    words: Vec::new(),
+                    text: word_text.clone(),
+                    words: vec![WordSpan {
+                        start_ms: word_start_ms,
+                        end_ms: word_end_ms,
+                        text: word_text,
+                    }],
                 });
             }
         }
 
         word_segments
     } else if let Some(segments) = &response.segments {
-        // use segment-level timing
+        // use segment-level timing, but try to populate words if available
         segments.iter()
             .filter_map(|seg| {
                 let start_ms = (seg.start * 1000.0) as u64;
@@ -1508,22 +1517,47 @@ pub fn whisper_to_caption_segments(response: &WhisperResponse, split_by_words: b
                     return None;
                 }
 
+                // If we have word-level data globally, try to assign words to this segment
+                let segment_words = if let Some(all_words) = &response.words {
+                    all_words.iter()
+                        .filter(|w| {
+                             let w_start_ms = (w.start * 1000.0) as u64;
+                             let w_end_ms = (w.end * 1000.0) as u64;
+                             // Include words that mostly overlap with the segment or are contained within it
+                             // Simple containment check:
+                             w_start_ms >= start_ms && w_end_ms <= final_end_ms + 100 // +100ms tolerance
+                        })
+                        .map(|w| WordSpan {
+                            start_ms: (w.start * 1000.0) as u64,
+                            end_ms: (w.end * 1000.0) as u64,
+                            text: w.word.clone(),
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
                 Some(CaptionSegment {
                     start_ms,
                     end_ms: final_end_ms,
                     text: seg.text.clone(),
-                    words: Vec::new(), // srt-style segments don't include word timing
+                    words: segment_words,
                 })
             })
             .collect()
     } else {
         // fallback: create single segment from full text
         let duration = response.duration.unwrap_or(60.0) * 1000.0;
+        let text = response.text.clone();
         vec![CaptionSegment {
             start_ms: 0,
             end_ms: duration as u64,
-            text: response.text.clone(),
-            words: Vec::new(),
+            text: text.clone(),
+            words: vec![WordSpan {
+                start_ms: 0,
+                end_ms: duration as u64,
+                text,
+            }],
         }]
     }
 }

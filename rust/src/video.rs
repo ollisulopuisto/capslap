@@ -2,6 +2,7 @@ use crate::rpc::RpcEvent;
 use crate::whisper::{find_ffmpeg_binary, find_ffprobe_binary};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command as TokioCommand;
+use tokio::io::AsyncBufReadExt;
 use std::process::Command;
 
 /// Get FFmpeg binary path synchronously (for use in sync functions)
@@ -802,13 +803,66 @@ pub async fn export_video(id: &str, p: ExportParams, mut emit: impl FnMut(RpcEve
         HardwareEncoder::Nvenc => "h264_nvenc (GPU)",
         HardwareEncoder::Software => "libx264 (CPU)",
     };
+    // Add progress flag to output to stdout
+    cmd.arg("-progress").arg("pipe:1");
+
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::inherit());
+
     emit(RpcEvent::Log {
         id: id.into(),
         message: format!("Starting export with CRF {}, encoder: {}, preset '{}', tune '{}', audio: {}",
                         crf, encoder_info, preset, tune, audio_codec)
     });
 
-    let status = cmd.status().await?;
+
+    
+    // Calculate total duration in microseconds for progress
+    let duration_us = pr.as_ref().and_then(|p| p.duration).map(|s| (s * 1_000_000.0) as u64);
+
+    emit(RpcEvent::Log { 
+        id: id.into(), 
+        message: format!("Duration from probe: {:?} us", duration_us) 
+    });
+
+    emit(RpcEvent::Progress {
+        id: id.to_string(),
+        status: "Starting export...".to_string(),
+        progress: 0.0
+    });
+
+    let mut child = cmd.spawn()?;
+    
+    // Handle stdout for progress
+    if let Some(stdout) = child.stdout.take() {
+        let reader = tokio::io::BufReader::new(stdout);
+        let mut lines = reader.lines();
+        
+        while let Ok(Some(line)) = lines.next_line().await {
+             // Debug log for checking what we get (temporary, can be verbose)
+             // emit(RpcEvent::Log { id: id.into(), message: format!("FFmpeg stdout: {}", line) });
+
+             if line.starts_with("out_time_us=") {
+                if let Ok(us) = line["out_time_us=".len()..].trim().parse::<u64>() {
+                    let progress = if let Some(total) = duration_us {
+                        if total > 0 {
+                            (us as f64 / total as f64).min(0.99) as f32
+                        } else { 0.0 }
+                    } else {
+                        0.0 // Todo: maybe fake progress or indeterminate state?
+                    };
+
+                    emit(RpcEvent::Progress {
+                        id: id.to_string(),
+                        status: format!("Exporting... ({:.0}%)", progress * 100.0),
+                        progress
+                    });
+                }
+            }
+        }
+    }
+    
+    let status = child.wait().await?;
 
     // If hardware encoder failed, try falling back to software encoding
     if !status.success() && !matches!(hardware_encoder, HardwareEncoder::Software) {
@@ -848,20 +902,51 @@ pub async fn export_video(id: &str, p: ExportParams, mut emit: impl FnMut(RpcEve
            .arg("-map").arg("0:v:0")
            .arg("-map").arg("0:a?")
            .arg("-movflags").arg("+faststart")
+           .arg("-progress").arg("pipe:1") // Enable progress for fallback too
            .arg(&p.out);
+
+        fallback_cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::inherit());
 
         emit(RpcEvent::Log {
             id: id.into(),
             message: "Retrying with software encoder (libx264)...".into()
         });
+        
+        let mut child_fallback = fallback_cmd.spawn()?;
+        if let Some(stdout) = child_fallback.stdout.take() {
+            let reader = tokio::io::BufReader::new(stdout);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                 if line.starts_with("out_time_us=") {
+                    if let Ok(us) = line["out_time_us=".len()..].trim().parse::<u64>() {
+                        let progress = if let Some(total) = duration_us {
+                            if total > 0 {
+                                (us as f64 / total as f64).min(0.99) as f32
+                            } else { 0.0 }
+                        } else {
+                            0.0
+                        };
+                        
+                        emit(RpcEvent::Progress {
+                            id: id.to_string(),
+                            status: format!("Exporting (software)... ({:.0}%)", progress * 100.0),
+                            progress
+                        });
+                    }
+                }
+            }
+        }
 
-        let fallback_status = fallback_cmd.status().await?;
+        let fallback_status = child_fallback.wait().await?;
         if !fallback_status.success() {
             return Err(anyhow::anyhow!("ffmpeg export failed with both hardware and software encoders"));
         }
     } else if !status.success() {
         return Err(anyhow::anyhow!("ffmpeg export failed"));
     }
+    
+    // 100% completion
+    emit(RpcEvent::Progress { id: id.into(), status: "Done".into(), progress: 1.0 });
 
     emit(RpcEvent::Log {
         id: id.into(),
@@ -891,18 +976,18 @@ pub async fn probe(id: &str, input: &str, mut emit: impl FnMut(RpcEvent)) -> any
     });
 
     // Run ffprobe with proper arguments to get file information as JSON
-    let child = TokioCommand::new(&ffprobe_path)
-        .arg("-v").arg("error")              // Only show errors, suppress info messages
-        .arg("-print_format").arg("json")    // Output as JSON for easy parsing
-        .arg("-show_streams")                // Include information about audio/video streams
-        .arg("-show_format")                 // Include information about file format
-        .arg(input)                          // The file to analyze
-        .stdout(std::process::Stdio::piped()) // Capture the output
-        .stderr(std::process::Stdio::piped()); // Capture stderr for debugging
+    let mut cmd = TokioCommand::new(&ffprobe_path);
+    cmd.arg("-v").arg("error")              // Only show errors, suppress info messages
+       .arg("-print_format").arg("json")    // Output as JSON for easy parsing
+       .arg("-show_streams")                // Include information about audio/video streams
+       .arg("-show_format")                 // Include information about file format
+       .arg(input)                          // The file to analyze
+       .stdout(std::process::Stdio::piped()) // Capture the output
+       .stderr(std::process::Stdio::piped()); // Capture stderr for debugging
         
-    child.kill_on_drop(true);
+    cmd.kill_on_drop(true);
     
-    let child = child.spawn()?;
+    let child = cmd.spawn()?;
 
     emit(RpcEvent::Log {
         id: id.into(),
@@ -1042,4 +1127,37 @@ fn parse_fps(s: &str) -> Option<f64> {
         // Handle decimal format like "29.97"
         s.parse().ok()
     }
+}
+
+/// Extract the first frame of a video as a base64 encoded PNG
+pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
+    let ffmpeg_path = get_ffmpeg_path_sync();
+    
+    // Command to extract the first frame
+    // ffmpeg -i input.mp4 -ss 0 -vframes 1 -f image2 -c:v png -
+    let output = Command::new(&ffmpeg_path)
+        .arg("-i")
+        .arg(video_path)
+        .arg("-ss")
+        .arg("0")
+        .arg("-vframes")
+        .arg("1")
+        .arg("-f")
+        .arg("image2")
+        .arg("-c:v")
+        .arg("png") // Use PNG for high quality and transparency support (if applicable)
+        .arg("-") // Output to stdout
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run ffmpeg: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("FFmpeg failed to extract frame: {}", stderr));
+    }
+
+    use base64::{Engine as _, engine::general_purpose};
+    let encoded = general_purpose::STANDARD.encode(&output.stdout);
+    
+    // Return with data URI scheme
+    Ok(format!("data:image/png;base64,{}", encoded))
 }
