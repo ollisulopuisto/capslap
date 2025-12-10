@@ -67,9 +67,10 @@ interface CaptionEditorProps {
     onCancel: () => void
     videoPath: string
     settings: Settings
+    previewFrame?: string | null
 }
 
-export function CaptionEditor({ initialSegments, onBurn, onCancel, videoPath, settings }: CaptionEditorProps) {
+export function CaptionEditor({ initialSegments, onBurn, onCancel, videoPath, settings, previewFrame }: CaptionEditorProps) {
     const [segments, setSegments] = useState<CaptionSegment[]>(initialSegments)
     const [isPlaying, setIsPlaying] = useState(false)
     const [currentTime, setCurrentTime] = useState(0)
@@ -239,7 +240,7 @@ export function CaptionEditor({ initialSegments, onBurn, onCancel, videoPath, se
 
     const renderPreviewOverlay = () => {
         const timeMs = currentTime * 1000
-        const activeSeg = segments.find(s => timeMs >= s.startMs && timeMs <= s.endMs)
+        const activeSeg = segments.find(s => timeMs >= s.startMs && timeMs < s.endMs)
 
         if (!activeSeg) return null
 
@@ -276,7 +277,7 @@ export function CaptionEditor({ initialSegments, onBurn, onCancel, videoPath, se
                         }
 
                         return (
-                            <span key={idx} style={wordStyle} className="text-2xl font-bold leading-tight break-words">
+                            <span key={idx} style={wordStyle} className="text-2xl font-bold leading-tight whitespace-nowrap">
                                 {word.text}
                             </span>
                         )
@@ -300,6 +301,7 @@ export function CaptionEditor({ initialSegments, onBurn, onCancel, videoPath, se
                         onPlay={() => setIsPlaying(true)}
                         onPause={() => setIsPlaying(false)}
                         playsInline
+                        poster={previewFrame ? `data:image/png;base64,${previewFrame}` : undefined}
                     />
 
                     {/* Overlay */}
@@ -333,7 +335,7 @@ export function CaptionEditor({ initialSegments, onBurn, onCancel, videoPath, se
 
                 <div className="flex-1 overflow-y-auto space-y-4 p-4">
                     {segments.map((seg, idx) => {
-                        const isActive = currentTime * 1000 >= seg.startMs && currentTime * 1000 <= seg.endMs;
+                        const isActive = currentTime * 1000 >= seg.startMs && currentTime * 1000 < seg.endMs;
                         const isEditing = editingSegmentIndex === idx
 
                         if (isEditing) {
@@ -398,7 +400,7 @@ export function CaptionEditor({ initialSegments, onBurn, onCancel, videoPath, se
                                 {/* Words */}
                                 <div className="flex flex-wrap gap-1.5">
                                     {seg.words.map((word, wIdx) => {
-                                        const isWordActive = currentTime * 1000 >= word.startMs && currentTime * 1000 <= word.endMs
+                                        const isWordActive = currentTime * 1000 >= word.startMs && currentTime * 1000 < word.endMs
                                         return (
                                             <span
                                                 key={wIdx}

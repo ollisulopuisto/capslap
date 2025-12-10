@@ -810,6 +810,7 @@ export default function App() {
               }}
               videoPath={editorVideoPath}
               settings={videoSettings}
+              previewFrame={previewFrame}
             />
           </div>
         ) : null}
