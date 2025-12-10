@@ -874,7 +874,7 @@ export default function App() {
               <div className="space-y-3">
                 <div className="space-y-1.5">
                   <div className="flex justify-between text-xs text-muted-foreground font-medium">
-                    <span className="truncate max-w-[70%]">{exportStatus || 'Processing...'}</span>
+                    <span className="truncate max-w-[70%]">{(exportStatus || 'Processing...').replace(/\s*\(\d+%\).*$/, '')}</span>
                     <span>{Math.round(exportProgress * 100)}%</span>
                   </div>
                   <div className="h-2 bg-secondary/50 rounded-full overflow-hidden">
