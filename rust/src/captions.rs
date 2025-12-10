@@ -1204,7 +1204,8 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                      // Target 3-5 lines for a nice block
                      let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
                      // Clamp: at least 25 chars (for long words), at most max_chars
-                     let wrapping_width = soft_target.clamp(25, max_chars);
+                     let min_chars = 25.min(max_chars).max(1);
+                     let wrapping_width = soft_target.clamp(min_chars, max_chars);
 
                      // Prepend bounce tag for entrance
                      let mut body = bounce_tag();
@@ -1325,7 +1326,8 @@ fn split_phrase_multiline(tokens: &[String], spans: &[WordSpan], frame_w: u32, f
     // Heuristic: target line length = total_chars / 3.5 (aiming for 3-4 lines)
     // trimmed to be at most max_chars_per_line
     let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
-    let target_chars = soft_target.clamp(25, max_chars_per_line); // Enforce min width 25
+    let min_chars = 25.min(max_chars_per_line).max(1); // Ensure min is not > max, and at least 1
+    let target_chars = soft_target.clamp(min_chars, max_chars_per_line);
     
     let mut segments = Vec::new();
     // In this specific "Storyteller" mode, we act as if the entire phrase is ONE segment (one screen),

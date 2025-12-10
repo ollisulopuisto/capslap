@@ -65,7 +65,7 @@ pub async fn transcribe_with_whisper_cpp(
     };
     let mut cmd = TokioCommand::new(&whisper_binary);
     // DTW disabled - causes timestamp issues for some audio files
-    let dtw_preset: Option<&str> = None;
+
 
     cmd.arg("-m").arg(&model_path)
        .arg("--output-json-full")    // Full JSON output
@@ -831,11 +831,21 @@ fn parse_whisper_cpp_output(json_output: &str) -> anyhow::Result<WhisperResponse
                     */
 
                     // Parse word-level timestamps from tokens array
-                    let tokens_array = segment.get("tokens")
-                        .and_then(|t| t.as_array())
-                        .or_else(|| segment.get("words").and_then(|w| w.as_array()));
+                    // Prioritize "words" (full words) over "tokens" (sub-word tokens)
+                    // Parse word-level timestamps from tokens array
+                    // Prioritize "words" (full words) over "tokens" (sub-word tokens)
+                    
+                    let (tokens_array, is_subword_tokens) = if let Some(arr) = segment.get("words").and_then(|w| w.as_array()) {
+                        (Some(arr), false) 
+                    } else if let Some(arr) = segment.get("tokens").and_then(|t| t.as_array()) {
+                        (Some(arr), true)
+                    } else {
+                        (None, false)
+                    };
 
                     if let Some(tokens) = tokens_array {
+                        let mut current_merged_word: Option<crate::types::WhisperWord> = None;
+
                         for token in tokens {
                             // Try different JSON structures for token timing
                             let (token_text, token_start, token_end) = if let (Some(text), Some(start), Some(end)) = (
@@ -855,18 +865,65 @@ fn parse_whisper_cpp_output(json_output: &str) -> anyhow::Result<WhisperResponse
                                 continue; // Skip if we can't parse this token
                             };
 
-                            // Skip special tokens like [_BEG_] and empty/whitespace-only tokens
-                            let token_text_trimmed = token_text.trim();
-                            if !token_text_trimmed.is_empty()
-                                && !token_text_trimmed.starts_with('[')
-                                && !token_text_trimmed.ends_with(']')
-                                && token_start < token_end {
+                            let token_start_sec = token_start / 1000.0;
+                            let token_end_sec = token_end / 1000.0;
 
-                                words.push(crate::types::WhisperWord {
-                                    word: token_text_trimmed.to_string(),
-                                    start: token_start / 1000.0, // Convert ms to seconds
-                                    end: token_end / 1000.0,
-                                });
+                            // Skip special tokens like [_BEG_]
+                            if token_text.starts_with('[') && token_text.ends_with(']') {
+                                continue;
+                            }
+
+                            if is_subword_tokens {
+                                // Merge logic for BPE tokens
+                                let starts_with_space = token_text.starts_with(' ');
+                                let is_punctuation = token_text.trim().len() == 1 && token_text.trim().chars().next().unwrap().is_ascii_punctuation();
+                                
+                                // Decision: Is this a new word?
+                                // Standard Whisper: new word starts with space.
+                                // But also check if we have no current word.
+                                
+                                if starts_with_space || current_merged_word.is_none() {
+                                    // Flush previous word if exists
+                                    if let Some(mut w) = current_merged_word.take() {
+                                        w.word = w.word.trim().to_string();
+                                        if !w.word.is_empty() {
+                                            words.push(w);
+                                        }
+                                    }
+                                    
+                                    // Start new word
+                                    current_merged_word = Some(crate::types::WhisperWord {
+                                        word: token_text.to_string(),
+                                        start: token_start_sec,
+                                        end: token_end_sec,
+                                    });
+                                } else {
+                                    // Append to current word
+                                    // Punctuation often attaches to previous word even without space
+                                    // or middle of word parts
+                                    if let Some(w) = current_merged_word.as_mut() {
+                                        w.word.push_str(token_text);
+                                        w.end = token_end_sec; // Extend duration
+                                    }
+                                }
+                            } else {
+                                // Direct words mode (already full words)
+                                let token_text_trimmed = token_text.trim();
+                                if !token_text_trimmed.is_empty() && token_start < token_end {
+                                    words.push(crate::types::WhisperWord {
+                                        word: token_text_trimmed.to_string(),
+                                        start: token_start_sec,
+                                        end: token_end_sec,
+                                    });
+                                }
+                            }
+                        }
+                        
+                        // Flush last merged word
+                        if let Some(mut w) = current_merged_word.take() {
+                            w.word = w.word.trim().to_string();
+                            if !w.word.is_empty() {
+                                words.push(w);
                             }
                         }
                     }
@@ -1632,6 +1689,7 @@ pub fn compute_segments_cache_key(audio_path: &str, params: &TranscribeSegmentsP
         "language": params.language,
         "split_by_words": params.split_by_words,
         "prompt": params.prompt,
+        "version": "v2_merged_tokens", // Invalidate cache for new merging logic
     });
     let params_hash = blake3::hash(params_for_hash.to_string().as_bytes()).to_hex().to_string();
 
