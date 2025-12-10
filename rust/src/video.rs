@@ -46,7 +46,7 @@ fn get_ffmpeg_path_sync() -> String {
 
 /// Get the fonts directory path for subtitle rendering
 /// Returns None if fonts directory cannot be found (libass will use system fonts)
-fn get_fonts_dir() -> Option<std::path::PathBuf> {
+fn _get_fonts_dir() -> Option<std::path::PathBuf> {
     // Priority 1: Development environment
     let dev_fonts = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/fonts");
     if dev_fonts.exists() && dev_fonts.is_dir() {

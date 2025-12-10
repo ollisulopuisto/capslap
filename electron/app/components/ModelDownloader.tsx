@@ -102,11 +102,12 @@ export function ModelDownloader({
                     className={`
                       group relative flex items-center justify-between p-3 border rounded-lg transition-all duration-200
                       ${isSelected ? 'border-primary/70 bg-primary/10 shadow-sm' : 'border-border/50'}
-                      ${canSelect && !isDownloading
-                        ? 'cursor-pointer hover:border-primary/70'
-                        : isDownloading
-                          ? 'cursor-wait'
-                          : 'cursor-not-allowed opacity-70'
+                      ${
+                        canSelect && !isDownloading
+                          ? 'cursor-pointer hover:border-primary/70'
+                          : isDownloading
+                            ? 'cursor-wait'
+                            : 'cursor-not-allowed opacity-70'
                       }
                     `}
                   >

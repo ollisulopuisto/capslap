@@ -110,7 +110,7 @@ interface Template {
   outlineColor: string
   glowEffect: boolean
   font: string
-  position: 'bottom' | 'center' | 'safe-center'
+  position: 'top' | 'top-quarter' | 'center' | 'bottom-quarter' | 'bottom'
 }
 
 interface Settings {
@@ -123,7 +123,7 @@ interface Settings {
   outlineColor: string
   glowEffect: boolean
   captionStyle: Template['captionStyle']
-  captionPosition: 'bottom' | 'center' | 'safe-center'
+  captionPosition: 'top' | 'top-quarter' | 'center' | 'bottom-quarter' | 'bottom'
   selectedLanguage: string
   outputSize?: string
   cropStrategy?: string
@@ -139,7 +139,7 @@ const defaultSettings: Settings = {
   outlineColor: '#000000',
   glowEffect: false,
   captionStyle: 'karaoke',
-  captionPosition: 'safe-center',
+  captionPosition: 'center',
   selectedLanguage: 'auto',
   outputSize: 'original',
   cropStrategy: 'fit',
@@ -192,7 +192,7 @@ const templates: Template[] = [
     outlineColor: '#000000',
     glowEffect: true,
     font: 'montserrat-black',
-    position: 'safe-center',
+    position: 'center',
   },
 ]
 
@@ -256,19 +256,18 @@ function TemplatePreviewCard({
 
     // Different layouts based on position
     const positionClass = cn(
-      "absolute left-0 right-0 text-center px-4",
-      template.position === 'bottom' && "bottom-8",
-      template.position === 'center' && "top-1/2 -translate-y-1/2",
-      template.position === 'safe-center' && "top-1/2 -translate-y-1/2" // Simplified for preview
+      'absolute left-0 right-0 text-center px-4',
+      template.position === 'top' && 'top-12',
+      template.position === 'top-quarter' && 'top-1/4',
+      template.position === 'center' && 'top-1/2 -translate-y-1/2',
+      template.position === 'bottom-quarter' && 'bottom-1/4',
+      template.position === 'bottom' && 'bottom-8'
     )
 
     return (
       <div className={positionClass}>
         <div className="flex flex-col items-center justify-center gap-1">
-          <span
-            style={baseStyle}
-            className="text-lg font-bold leading-tight break-words max-w-full"
-          >
+          <span style={baseStyle} className="text-lg font-bold leading-tight break-words max-w-full">
             LOREM IPSUM
           </span>
           <span
@@ -281,7 +280,6 @@ function TemplatePreviewCard({
       </div>
     )
   }
-
 
   return (
     <div
@@ -302,11 +300,7 @@ function TemplatePreviewCard({
         <div className="relative w-full" style={{ aspectRatio: '9/16' }}>
           {previewFrame ? (
             <div className="relative w-full h-full">
-              <img
-                src={previewFrame}
-                className="w-full h-full object-cover"
-                alt="Preview"
-              />
+              <img src={previewFrame} className="w-full h-full object-cover" alt="Preview" />
               {/* Caption Overlay */}
               {renderCaptionPreview()}
             </div>
@@ -329,7 +323,6 @@ function TemplatePreviewCard({
               }}
             />
           )}
-
 
           {/* Overlay for better text visibility */}
           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
@@ -477,7 +470,6 @@ export default function App() {
   const [editorVideoPath, setEditorVideoPath] = useState<string>('')
   const [editorJobId, setEditorJobId] = useState<string>('')
 
-
   useEffect(() => {
     // Listen for global progress events
     // We cast window.rust to any because onProgress might not be in the global type definition yet
@@ -564,12 +556,14 @@ export default function App() {
           const firstVideo = pathsWithoutDuplicates[0]
           try {
             // Call backend to extract frame
-            const result = await window.rust.call('extractFirstFrame', { videoPath: firstVideo }) as { imageData: string }
+            const result = (await window.rust.call('extractFirstFrame', { videoPath: firstVideo })) as {
+              imageData: string
+            }
             if (result && result.imageData) {
               setPreviewFrame(result.imageData)
             }
           } catch (e) {
-            console.error("Failed to extract frame preview", e)
+            console.error('Failed to extract frame preview', e)
           }
         }
       }
@@ -610,20 +604,24 @@ export default function App() {
     setExportStatus('Burning captions...')
 
     try {
-      await window.rust.call('burn', {
-        inputVideo: editorVideoPath,
-        segments: segments,
-        exportFormats: videoSettings.exportFormats,
-        karaoke: videoSettings.captionStyle === 'karaoke',
-        fontName: getFontName(videoSettings.selectedFont),
-        textColor: videoSettings.textColor,
-        highlightWordColor: videoSettings.highlightWordColor,
-        outlineColor: videoSettings.outlineColor,
-        glowEffect: videoSettings.glowEffect,
-        position: videoSettings.captionPosition,
-        outputSize: videoSettings.outputSize,
-        cropStrategy: videoSettings.cropStrategy,
-      }, editorJobId)
+      await window.rust.call(
+        'burn',
+        {
+          inputVideo: editorVideoPath,
+          segments: segments,
+          exportFormats: videoSettings.exportFormats,
+          karaoke: videoSettings.captionStyle === 'karaoke',
+          fontName: getFontName(videoSettings.selectedFont),
+          textColor: videoSettings.textColor,
+          highlightWordColor: videoSettings.highlightWordColor,
+          outlineColor: videoSettings.outlineColor,
+          glowEffect: videoSettings.glowEffect,
+          position: videoSettings.captionPosition,
+          outputSize: videoSettings.outputSize,
+          cropStrategy: videoSettings.cropStrategy,
+        },
+        editorJobId
+      )
 
       toast.success('Video exported successfully!')
     } catch (error: any) {
@@ -666,33 +664,36 @@ export default function App() {
         toast.info('Batch mode not supported in editor yet. Processing first video only.')
       }
 
-      const result = await window.rust.call('transcribe', {
-        inputVideo: video,
-        exportFormats: videoSettings.exportFormats,
-        karaoke: videoSettings.captionStyle === 'karaoke',
-        fontName: getFontName(videoSettings.selectedFont),
-        splitByWords: false,
-        model: videoSettings.selectedModel,
-        language: videoSettings.selectedLanguage,
-        prompt: null,
-        textColor: videoSettings.textColor,
-        highlightWordColor: videoSettings.highlightWordColor,
-        outlineColor: videoSettings.outlineColor,
-        glowEffect: videoSettings.glowEffect,
-        position: videoSettings.captionPosition,
-        outputSize: videoSettings.outputSize,
-        cropStrategy: videoSettings.cropStrategy,
-        apiKey: apiKey,
-      }, requestId) as any
+      const result = (await window.rust.call(
+        'transcribe',
+        {
+          inputVideo: video,
+          exportFormats: videoSettings.exportFormats,
+          karaoke: videoSettings.captionStyle === 'karaoke',
+          fontName: getFontName(videoSettings.selectedFont),
+          splitByWords: false,
+          model: videoSettings.selectedModel,
+          language: videoSettings.selectedLanguage,
+          prompt: null,
+          textColor: videoSettings.textColor,
+          highlightWordColor: videoSettings.highlightWordColor,
+          outlineColor: videoSettings.outlineColor,
+          glowEffect: videoSettings.glowEffect,
+          position: videoSettings.captionPosition,
+          outputSize: videoSettings.outputSize,
+          cropStrategy: videoSettings.cropStrategy,
+          apiKey: apiKey,
+        },
+        requestId
+      )) as any
 
       if (result && result.transcription && result.transcription.segments) {
         setEditorSegments(result.transcription.segments)
         setIsGenerating(false) // Stop spinner, ready for edit
         setIsEditorOpen(true)
       } else {
-        throw new Error("No transcription results")
+        throw new Error('No transcription results')
       }
-
     } catch (error: any) {
       showErrorToast(error, 1)
       setIsGenerating(false)
@@ -726,7 +727,6 @@ export default function App() {
   }
 
   const handleDrop = async (e: React.DragEvent) => {
-
     e.preventDefault()
     e.stopPropagation()
     setIsDragOver(false)
@@ -775,12 +775,14 @@ export default function App() {
         if (validNewPaths.length > 0) {
           const firstVideo = validNewPaths[0]
           try {
-            const result = await window.rust.call('extractFirstFrame', { videoPath: firstVideo }) as { imageData: string }
+            const result = (await window.rust.call('extractFirstFrame', { videoPath: firstVideo })) as {
+              imageData: string
+            }
             if (result && result.imageData) {
               setPreviewFrame(result.imageData)
             }
           } catch (e) {
-            console.error("Failed to extract frame preview", e)
+            console.error('Failed to extract frame preview', e)
           }
         }
       }
@@ -799,21 +801,7 @@ export default function App() {
       >
         <Toaster />
 
-        {isEditorOpen ? (
-          <div className="absolute inset-0 z-40 bg-background">
-            <CaptionEditor
-              initialSegments={editorSegments}
-              onBurn={handleBurn}
-              onCancel={() => {
-                setIsEditorOpen(false)
-                setEditorJobId('')
-              }}
-              videoPath={editorVideoPath}
-              settings={videoSettings}
-              previewFrame={previewFrame}
-            />
-          </div>
-        ) : null}
+
 
         {isDragOver && (
           <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
@@ -875,7 +863,9 @@ export default function App() {
               <div className="space-y-3">
                 <div className="space-y-1.5">
                   <div className="flex justify-between text-xs text-muted-foreground font-medium">
-                    <span className="truncate max-w-[70%]">{(exportStatus || 'Processing...').replace(/\s*\(\d+%\).*$/, '')}</span>
+                    <span className="truncate max-w-[70%]">
+                      {(exportStatus || 'Processing...').replace(/\s*\(\d+%\).*$/, '')}
+                    </span>
                     <span>{Math.round(exportProgress * 100)}%</span>
                   </div>
                   <div className="h-2 bg-secondary/50 rounded-full overflow-hidden">
@@ -895,9 +885,7 @@ export default function App() {
                 </Button>
               </div>
             ) : (
-              <div className="text-center text-sm text-muted-foreground">
-                Ready to generate
-              </div>
+              <div className="text-center text-sm text-muted-foreground">Ready to generate</div>
             )}
           </div>
 
@@ -917,7 +905,6 @@ export default function App() {
                     onSelect={() => selectTemplate(template)}
                     previewFrame={previewFrame}
                   />
-
                 ))}
               </div>
             </div>
@@ -935,7 +922,9 @@ export default function App() {
                     <label className="text-xs text-muted-foreground mb-1 block">Style</label>
                     <Select
                       value={videoSettings.captionStyle}
-                      onValueChange={(value: 'karaoke' | 'oneliner' | 'vibrant' | 'storyteller') => updateSettings({ captionStyle: value })}
+                      onValueChange={(value: 'karaoke' | 'oneliner' | 'vibrant' | 'storyteller') =>
+                        updateSettings({ captionStyle: value })
+                      }
                     >
                       <SelectTrigger className="w-full h-8 text-xs">
                         <SelectValue />
@@ -953,16 +942,17 @@ export default function App() {
                     <label className="text-xs text-muted-foreground mb-1 block">Position</label>
                     <Select
                       value={videoSettings.captionPosition}
-                      onValueChange={(value: 'bottom' | 'center' | 'safe-center') => updateSettings({ captionPosition: value })}
+                      onValueChange={(value) => updateSettings({ captionPosition: value as any })}
                     >
-                      <SelectTrigger className="w-full  h-8 text-xs">
-                        <SelectValue />
+                      <SelectTrigger className="w-full h-9 bg-background/50 border-border hover:border-primary/50 text-xs">
+                        <SelectValue placeholder="Position" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="bottom">Bottom</SelectItem>
-                        <SelectItem value="bottom">Bottom</SelectItem>
+                        <SelectItem value="top">Top</SelectItem>
+                        <SelectItem value="top-quarter">1/4 from Top</SelectItem>
                         <SelectItem value="center">Center</SelectItem>
-                        <SelectItem value="safe-center">Safe Center (For Storytelling)</SelectItem>
+                        <SelectItem value="bottom-quarter">1/4 from Bottom</SelectItem>
+                        <SelectItem value="bottom">Bottom</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1237,102 +1227,118 @@ export default function App() {
         {/* Upload sectino */}
 
         <div className="relative flex-1 flex flex-col">
-          <div className="relative flex-1 overflow-y-auto scrollbar-hide pb-28">
-            {selectedVideos.length === 0 && (
-              <div className="h-full px-8 pt-6">
-                <div
-                  className={cn(
-                    'group max-w-2xl mx-auto relative h-full flex flex-col items-center justify-center p-12 rounded-2xl border-2 border-dashed transition-all duration-300 cursor-pointer',
-                    'hover:border-primary/70 hover:bg-primary/5',
-                    isDragOver ? 'border-primary bg-primary/10 scale-[1.01]' : 'border-border/50 bg-card/30'
-                  )}
-                  onClick={handleVideoSelect}
-                >
-                  <div className="flex flex-col items-center justify-center h-full">
-                    <div className="p-5 rounded-2xl bg-primary inline-flex mb-4">
-                      <Upload className="w-8 h-8 text-primary-foreground" />
-                    </div>
-                    <h2 className="text-2xl font-medium text-foreground mb-2">Upload your videos</h2>
-                    <p className="text-muted-foreground mb-4">Click to select or drag and drop files</p>
-                    <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-                      <span>Supported:</span>
-                      {['MP4', 'MOV', 'MKV', 'AVI'].map((format) => (
-                        <span key={format} className="px-1.5 py-0.5 bg-muted rounded text-xs font-mono">
-                          {format}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {selectedVideos.length > 0 && (
-              <div className="flex justify-center w-full px-8 mx-auto">
-                <div className="space-y-4 w-full max-w-2xl">
-                  <div className="flex items-center justify-between sticky top-0 bg-background/80 backdrop-blur-xs z-10 rounded-lg py-2 pt-6">
-                    <h3 className="text-lg font-medium text-foreground flex items-center gap-2">Uploaded files</h3>
-                    <div className="flex items-center gap-2">
-                      {selectedVideos.length > 1 && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setSelectedVideos([])}
-                          className="text-muted-foreground hover:text-foreground text-xs"
-                        >
-                          Clear all
-                        </Button>
+          {isEditorOpen ? (
+            <CaptionEditor
+              initialSegments={editorSegments}
+              onBurn={handleBurn}
+              onCancel={() => {
+                setIsEditorOpen(false)
+                setEditorJobId('')
+              }}
+              videoPath={editorVideoPath}
+              settings={videoSettings}
+              previewFrame={previewFrame}
+            />
+          ) : (
+            <>
+              <div className="relative flex-1 overflow-y-auto scrollbar-hide pb-28">
+                {selectedVideos.length === 0 && (
+                  <div className="h-full px-8 pt-6">
+                    <div
+                      className={cn(
+                        'group max-w-2xl mx-auto relative h-full flex flex-col items-center justify-center p-12 rounded-2xl border-2 border-dashed transition-all duration-300 cursor-pointer',
+                        'hover:border-primary/70 hover:bg-primary/5',
+                        isDragOver ? 'border-primary bg-primary/10 scale-[1.01]' : 'border-border/50 bg-card/30'
                       )}
+                      onClick={handleVideoSelect}
+                    >
+                      <div className="flex flex-col items-center justify-center h-full">
+                        <div className="p-5 rounded-2xl bg-primary inline-flex mb-4">
+                          <Upload className="w-8 h-8 text-primary-foreground" />
+                        </div>
+                        <h2 className="text-2xl font-medium text-foreground mb-2">Upload your videos</h2>
+                        <p className="text-muted-foreground mb-4">Click to select or drag and drop files</p>
+                        <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                          <span>Supported:</span>
+                          {['MP4', 'MOV', 'MKV', 'AVI'].map((format) => (
+                            <span key={format} className="px-1.5 py-0.5 bg-muted rounded text-xs font-mono">
+                              {format}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </div>
+                )}
 
-                  <div
-                    className={cn(
-                      'grid gap-3',
-                      selectedVideos.length <= 4 ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2'
-                    )}
-                  >
-                    {selectedVideos.map((path, index) => (
-                      <FileCard
-                        key={index}
-                        path={path}
-                        onRemove={() => setSelectedVideos((prev) => prev.filter((p) => p !== path))}
-                      />
-                    ))}
+                {selectedVideos.length > 0 && (
+                  <div className="flex justify-center w-full px-8 mx-auto">
+                    <div className="space-y-4 w-full max-w-2xl">
+                      <div className="flex items-center justify-between sticky top-0 bg-background/80 backdrop-blur-xs z-10 rounded-lg py-2 pt-6">
+                        <h3 className="text-lg font-medium text-foreground flex items-center gap-2">Uploaded files</h3>
+                        <div className="flex items-center gap-2">
+                          {selectedVideos.length > 1 && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setSelectedVideos([])}
+                              className="text-muted-foreground hover:text-foreground text-xs"
+                            >
+                              Clear all
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div
+                        className={cn(
+                          'grid gap-3',
+                          selectedVideos.length <= 4 ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2'
+                        )}
+                      >
+                        {selectedVideos.map((path, index) => (
+                          <FileCard
+                            key={index}
+                            path={path}
+                            onRemove={() => setSelectedVideos((prev) => prev.filter((p) => p !== path))}
+                          />
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
-            )}
-          </div>
 
-          <div className="flex items-center justify-center w-full py-6 border-t border-border/50 absolute bottom-0 bg-background/80 backdrop-blur-xs z-10 px-8">
-            <Button
-              onClick={handleGenerate}
-              disabled={!selectedVideos.length || !videoSettings.exportFormats?.length || isGenerating}
-              size="lg"
-              className="max-w-2xl w-full py-4 text-lg font-medium bg-primary text-primary-foreground disabled:opacity-50 disabled:scale-100 transition-all duration-300"
-            >
-              {isGenerating ? (
-                <>
-                  <Cog className="w-5 h-5 animate-spin mr-2" />
-                  Generating...
-                </>
-              ) : selectedVideos.length > 0 ? (
-                <>
-                  <Zap className="w-5 h-5 mr-2" />
-                  Generate {selectedVideos.length * videoSettings.exportFormats?.length} video
-                  {selectedVideos.length * videoSettings.exportFormats?.length > 1 ? 's' : ''}
-                </>
-              ) : (
-                <>
-                  <Zap className="w-5 h-5 mr-2" />
-                  Upload videos first
-                </>
-              )}
-            </Button>
-          </div>
+              <div className="flex items-center justify-center w-full py-6 border-t border-border/50 absolute bottom-0 bg-background/80 backdrop-blur-xs z-10 px-8">
+                <Button
+                  onClick={handleGenerate}
+                  disabled={!selectedVideos.length || !videoSettings.exportFormats?.length || isGenerating}
+                  size="lg"
+                  className="max-w-2xl w-full py-4 text-lg font-medium bg-primary text-primary-foreground disabled:opacity-50 disabled:scale-100 transition-all duration-300"
+                >
+                  {isGenerating ? (
+                    <>
+                      <Cog className="w-5 h-5 animate-spin mr-2" />
+                      Generating...
+                    </>
+                  ) : selectedVideos.length > 0 ? (
+                    <>
+                      <Zap className="w-5 h-5 mr-2" />
+                      Generate {selectedVideos.length * videoSettings.exportFormats?.length} video
+                      {selectedVideos.length * videoSettings.exportFormats?.length > 1 ? 's' : ''}
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-5 h-5 mr-2" />
+                      Upload videos first
+                    </>
+                  )}
+                </Button>
+              </div>
+            </>
+          )}
         </div>
-      </div >
+      </div>
     </>
   )
 }

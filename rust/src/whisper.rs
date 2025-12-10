@@ -567,28 +567,6 @@ fn get_model_download_url(model_filename: &str) -> String {
     format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}", model_filename)
 }
 
-/// Download whisper model from HuggingFace
-async fn download_whisper_model(url: &str, path: &str) -> anyhow::Result<()> {
-    use reqwest;
-    use tokio::io::AsyncWriteExt;
-
-    let response = reqwest::get(url).await?;
-    if !response.status().is_success() {
-        return Err(anyhow::anyhow!("Failed to download model: HTTP {}", response.status()));
-    }
-
-    let mut file = tokio::fs::File::create(path).await?;
-    let mut stream = response.bytes_stream();
-
-    use futures_util::StreamExt;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        file.write_all(&chunk).await?;
-    }
-
-    file.flush().await?;
-    Ok(())
-}
 
 /// Public RPC method to download a whisper model with progress reporting
 pub async fn download_model_rpc(
@@ -876,7 +854,7 @@ fn parse_whisper_cpp_output(json_output: &str) -> anyhow::Result<WhisperResponse
                             if is_subword_tokens {
                                 // Merge logic for BPE tokens
                                 let starts_with_space = token_text.starts_with(' ');
-                                let is_punctuation = token_text.trim().len() == 1 && token_text.trim().chars().next().unwrap().is_ascii_punctuation();
+                                let _is_punctuation = token_text.trim().len() == 1 && token_text.trim().chars().next().unwrap().is_ascii_punctuation();
                                 
                                 // Decision: Is this a new word?
                                 // Standard Whisper: new word starts with space.

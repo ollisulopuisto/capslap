@@ -866,7 +866,7 @@ struct AssStyle {
     highlight: String,   // green for current word
 }
 
-fn pct_to_margin_v(frame_h: u32, y_pct_from_top: f32) -> u32 {
+fn _pct_to_margin_v(frame_h: u32, y_pct_from_top: f32) -> u32 {
     // bottom-aligned: margin_v measured from bottom
     let y = (frame_h as f32 * (y_pct_from_top / 100.0)).round() as i32;
     let margin_from_bottom = (frame_h as i32 - y).max(0) as u32;
@@ -1322,11 +1322,19 @@ fn default_ass_style(
     let highlight = highlight_color.map(hex_to_ass_color).unwrap_or_else(|| "&H0000FFFE".into());
     let outline = outline_color.map(hex_to_ass_color).unwrap_or_else(|| "&H00000000".into());
 
+    // Helper for percentage of height
+    let pct_h = |p: f32| -> u32 {
+        (frame_h as f32 * (p / 100.0)).round() as u32
+    };
+
     // Determine vertical position and alignment based on position parameter
     let (align, margin_v) = match position.unwrap_or("bottom") {
-        "center" => (5, 0), // Alignment 5 = middle center, margin_v 0 for center
-        "safe-center" => (5, 0), // Alignment 5 = middle center, margin_v 0 for center
-        _ => (2, pct_to_margin_v(frame_h, 88.0)), // Alignment 2 = bottom center (default)
+        "top" => (8, pct_h(12.0)), // Top center, 12% from top
+        "top-quarter" => (8, pct_h(25.0)), // Top center, 25% from top
+        "center" => (5, 0), // Middle center
+        "bottom-quarter" => (2, pct_h(25.0)), // Bottom center, 25% from bottom
+        "safe-center" => (5, 0), // Legacy support: Middle center
+        _ => (2, pct_h(12.0)), // Bottom center, 12% from bottom (default)
     };
 
     AssStyle {
