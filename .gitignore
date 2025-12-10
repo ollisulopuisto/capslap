@@ -27,3 +27,4 @@ electron/out/
 electron/dist/
 node_modules/
 electron/package-lock.json
+rust/check_output.txt

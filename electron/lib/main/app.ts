@@ -76,35 +76,45 @@ function registerResourcesProtocol() {
         const url = new URL(request.url)
         const relativePath = url.href.replace('res://', '')
 
-        const possiblePaths = [
-          join(__dirname, '../../resources', relativePath),
-          join(__dirname, '../../../resources', relativePath),
-          join(process.resourcesPath, relativePath),
-          join(process.resourcesPath, 'app.asar.unpacked', 'resources', relativePath),
-        ]
-
         let filePath: string | null = null
-        for (const path of possiblePaths) {
-          if (require('fs').existsSync(path)) {
-            filePath = path
-            break
+
+        if (relativePath.startsWith('local/')) {
+          // Handle absolute path
+          filePath = relativePath.replace('local', '')
+          // Decode generic URL encoding if needed (spaces etc)
+          filePath = decodeURIComponent(filePath)
+          console.log('Loading local file:', filePath)
+        } else {
+          const possiblePaths = [
+            join(__dirname, '../../resources', relativePath),
+            join(__dirname, '../../../resources', relativePath),
+            join(process.resourcesPath, relativePath),
+            join(process.resourcesPath, 'app.asar.unpacked', 'resources', relativePath),
+          ]
+
+          for (const path of possiblePaths) {
+            if (require('fs').existsSync(path)) {
+              filePath = path
+              break
+            }
           }
         }
 
-        if (!filePath) {
-          console.error('File not found in any location')
+        if (!filePath || !require('fs').existsSync(filePath)) {
+          console.error('File not found:', filePath)
           return new Response('Resource not found', { status: 404 })
         }
 
         const response = await net.fetch(pathToFileURL(filePath).toString())
 
-        if (relativePath.endsWith('.mp4')) {
+        if (relativePath.endsWith('.mp4') || relativePath.endsWith('.mov')) {
           const buffer = await response.arrayBuffer()
+          const contentType = relativePath.endsWith('.mov') ? 'video/quicktime' : 'video/mp4'
 
           return new Response(buffer, {
             status: 200,
             headers: {
-              'Content-Type': 'video/mp4',
+              'Content-Type': contentType,
               'Accept-Ranges': 'bytes',
               'Access-Control-Allow-Origin': '*',
               'Content-Length': buffer.byteLength.toString(),

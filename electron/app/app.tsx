@@ -809,6 +809,7 @@ export default function App() {
                 setEditorJobId('')
               }}
               videoPath={editorVideoPath}
+              settings={videoSettings}
             />
           </div>
         ) : null}

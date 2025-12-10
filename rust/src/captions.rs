@@ -742,10 +742,47 @@ fn normalize_tokens(words: &[WordSpan]) -> Vec<String> {
         .collect()
 }
 
+// Split tokens containing hyphens into sub-tokens to allow wrapping
+// e.g. "FOO-BAR" -> ["FOO-", "BAR"]
+fn preprocess_hyphenated_tokens(tokens: &[String], spans: &[WordSpan]) -> (Vec<String>, Vec<WordSpan>) {
+    let mut new_tokens = Vec::new();
+    let mut new_spans = Vec::new();
+
+    for (token, span) in tokens.iter().zip(spans.iter()) {
+        if token.contains('-') && token.len() > 3 { // Only split if length meaningful
+            let parts: Vec<&str> = token.split('-').collect();
+            let count = parts.len();
+            for (i, part) in parts.iter().enumerate() {
+                // If it's empty (trailing hyphen?), skip unless it renders oddly.
+                // "FOO-" splits to "FOO", "" -> we want "FOO-"
+                // Actually split('-') on "FOO-BAR" gives "FOO", "BAR".
+                // We want to attach hyphen to the first part.
+                
+                let mut text = part.to_string();
+                // Add hyphen back if this isn't the last part
+                if i < count - 1 {
+                    text.push('-');
+                }
+                
+                if !text.is_empty() {
+                    new_tokens.push(text);
+                    new_spans.push(span.clone());
+                }
+            }
+        } else {
+            new_tokens.push(token.clone());
+            new_spans.push(span.clone());
+        }
+    }
+    (new_tokens, new_spans)
+}
+
 // Simple width check for karaoke - split long phrases into single-line segments
 fn split_phrase_for_width(tokens: &[String], spans: &[WordSpan], frame_w: u32, font_px: u32) -> Vec<(Vec<String>, Vec<WordSpan>)> {
-    let est_char_width = (font_px as f32 * 0.56).max(1.0);
-    let max_chars = ((frame_w as f32 * 0.85) / est_char_width).floor() as usize; // Use 85% of width for safety
+    let (tokens, spans) = preprocess_hyphenated_tokens(tokens, spans); // Handle hyphens first
+
+    let est_char_width = (font_px as f32 * 0.7).max(1.0);
+    let max_chars = ((frame_w as f32 * 0.9) / est_char_width).floor() as usize; // Use 90% of width
 
     let mut segments = Vec::new();
     let mut current_tokens = Vec::new();
@@ -1310,8 +1347,10 @@ fn default_ass_style(
 // Aim for balanced lines, filling the middle of the screen
 fn split_phrase_multiline(tokens: &[String], spans: &[WordSpan], frame_w: u32, font_px: u32) -> Vec<(Vec<String>, Vec<WordSpan>)> {
     eprintln!("DEBUG: split_phrase_multiline start. tokens={}", tokens.len());
-    let est_char_width = (font_px as f32 * 0.50).max(1.0); // Slightly tighter estimate for packing
-    let max_chars_per_line = ((frame_w as f32 * 0.85) / est_char_width).floor() as usize; 
+    let (tokens, spans) = preprocess_hyphenated_tokens(tokens, spans); // Handle hyphens first
+
+    let est_char_width = (font_px as f32 * 0.7).max(1.0); // Consistent with split_phrase_for_width
+    let max_chars_per_line = ((frame_w as f32 * 0.9) / est_char_width).floor() as usize; 
     let max_lines = 4;
     // Target roughly 3-4 lines if text is long enough, otherwise fill normally.
     // Calculate total chars to see if we SHOULD force multiline
@@ -1319,7 +1358,7 @@ fn split_phrase_multiline(tokens: &[String], spans: &[WordSpan], frame_w: u32, f
     
     // If text is short, just use standard wrapping (it might end up as 1-2 lines)
     if total_chars < max_chars_per_line * 2 {
-        return split_phrase_for_width(tokens, spans, frame_w, font_px);
+        return split_phrase_for_width(&tokens, &spans, frame_w, font_px);
     }
 
     // For longer text, we want to balance it into a block of 3-4 lines.
