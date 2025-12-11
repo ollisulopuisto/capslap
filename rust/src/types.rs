@@ -202,3 +202,46 @@ pub struct ExtractFirstFrameParams {
 pub struct ExtractFirstFrameResult {
     pub image_data: String, // Base64 encoded image
 }
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewLayoutParams {
+    pub segments: Vec<CaptionSegment>,
+    pub width: u32,
+    pub height: u32,
+    pub font_name: Option<String>,
+    pub text_color: Option<String>,
+    pub highlight_word_color: Option<String>,
+    pub outline_color: Option<String>,
+    pub position: Option<String>,
+    pub karaoke: bool,
+    pub glow_effect: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewLayoutResult {
+    pub cues: Vec<PreviewCue>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewCue {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub lines: Vec<PreviewLine>,
+    pub y_pct: f32, // Vertical position as percentage from top
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewLine {
+    pub words: Vec<PreviewWord>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewWord {
+    pub text: String,
+    pub is_highlighted: bool,
+}

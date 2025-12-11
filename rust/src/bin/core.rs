@@ -213,6 +213,16 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                 Err(e) => write_err(format!("Invalid params for burn: {}", e)),
             }
         }
+        "previewLayout" => {
+            match serde_json::from_value::<core::types::PreviewLayoutParams>(r.params) {
+                Ok(p) => match captions::generate_preview_layout(p) {
+                    Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
+                    Err(e) => write_err(e.to_string()),
+                },
+                Err(e) => write_err(format!("Invalid params for previewLayout: {}", e)),
+            }
+        }
         _ => write_err(format!("Unknown method: {}", r.method)),
+
     }
 }

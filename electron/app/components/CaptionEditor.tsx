@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { Button } from '@/app/components/ui/button'
-import { ArrowLeft, ArrowRight, Play, Pause, Save, Pencil, Check, X, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Play, Pause, Pencil, Check, X, Zap } from 'lucide-react'
 import { Textarea } from '@/app/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
@@ -70,6 +70,17 @@ interface CaptionEditorProps {
   previewFrame?: string | null
 }
 
+// ... (previous imports)
+
+interface PreviewCue {
+  startMs: number
+  endMs: number
+  lines: { words: { text: string; isHighlighted: boolean }[] }[]
+  yPct: number
+}
+
+// ... (existing interfaces)
+
 export function CaptionEditor({
   initialSegments,
   onBurn,
@@ -87,8 +98,43 @@ export function CaptionEditor({
   const videoRef = useRef<HTMLVideoElement>(null)
   const activeSegmentRef = useRef<HTMLDivElement>(null)
 
+  // New state for layout
+  const [previewCues, setPreviewCues] = useState<PreviewCue[]>([])
+  const [videoDims, setVideoDims] = useState<{ width: number; height: number } | null>(null)
+
   // Convert video path to renderable URL
   const videoUrl = videoPath.startsWith('/') ? `res://local${videoPath}` : videoPath
+
+  // Fetch layout from backend
+  useEffect(() => {
+    if (!videoDims) return
+
+    const fetchLayout = async () => {
+      try {
+        const result = (await (window as any).rust.call('previewLayout', {
+          segments,
+          width: videoDims.width,
+          height: videoDims.height,
+          fontName: getFontName(settings.selectedFont),
+          textColor: settings.textColor,
+          highlightWordColor: settings.highlightWordColor,
+          outlineColor: settings.outlineColor,
+          position: settings.captionPosition,
+          karaoke: settings.captionStyle === 'karaoke',
+          glowEffect: settings.glowEffect,
+        })) as { cues: PreviewCue[] }
+
+        if (result && result.cues) {
+          setPreviewCues(result.cues)
+        }
+      } catch (e) {
+        console.error('Failed to fetch preview layout', e)
+      }
+    }
+
+    const timer = setTimeout(fetchLayout, 100)
+    return () => clearTimeout(timer)
+  }, [segments, settings, videoDims])
 
   useEffect(() => {
     if (activeSegmentRef.current) {
@@ -110,6 +156,15 @@ export function CaptionEditor({
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       setCurrentTime(videoRef.current.currentTime)
+    }
+  }
+
+  const handleLoadedMetadata = () => {
+    if (videoRef.current) {
+      setVideoDims({
+        width: videoRef.current.videoWidth,
+        height: videoRef.current.videoHeight,
+      })
     }
   }
 
@@ -159,13 +214,6 @@ export function CaptionEditor({
     const newSegments = [...segments]
     newSegments[index] = newCurrent
     newSegments[index + 1] = newNext
-
-    // If current becomes empty, remove it?
-    // Let's keep empty segments for now to avoid index shifts, or remove if desired
-    if (newCurrent.words.length === 0) {
-      // careful with index shifts if we remove
-      // newSegments.splice(index, 1)
-    }
 
     setSegments(newSegments)
     setHasPreviewed(false)
@@ -217,7 +265,7 @@ export function CaptionEditor({
     const seg = segments[index]
     const newText = editText.trim()
 
-    if (!newText) return // Don't allow empty segments for now? Or remove it?
+    if (!newText) return
 
     // Split into words
     const newWordsTexts = newText.split(/\s+/)
@@ -248,9 +296,10 @@ export function CaptionEditor({
 
   const renderPreviewOverlay = () => {
     const timeMs = currentTime * 1000
-    const activeSeg = segments.find((s) => timeMs >= s.startMs && timeMs < s.endMs)
+    // Find active cue from backend layout
+    const activeCue = previewCues.find((c) => timeMs >= c.startMs && timeMs < c.endMs)
 
-    if (!activeSeg) return null
+    if (!activeCue) return null
 
     const fontName = getFontName(settings.selectedFont)
     const baseStyle = {
@@ -259,6 +308,39 @@ export function CaptionEditor({
       WebkitTextStroke: settings.outlineColor ? `2px ${settings.outlineColor}` : 'none',
       textShadow: settings.glowEffect ? `0 0 10px ${settings.highlightWordColor}` : 'none',
     }
+
+    // Use backend-provided Y percentage
+    // const topPct = activeCue.yPct
+
+    // We can position absolutely using top: X%
+    // If align was center (50%), we probably want to translate-y -50%?
+    // The backend `y_pct` logic:
+    // If align 5: y_pct=50. 
+    // If align 2: y_pct = 100 - margin_pct.
+    // CSS "top: 50%" puts the TOP edge at 50%. Centering requires transform.
+    // But ASS pos(x,y) with align 5 means the center of the text is at (x,y).
+    // So yes, `top: ${topPct}%`, transform: `translateY(-50%)` if we assume center baseline?
+    // Wait, if alignment is bottom (2), ASS pos(x,y) means bottom-center of text is at (x,y).
+    // So if y_pct is 90%, we want bottom of text at 90%.
+    // So `top: ${topPct}%`, `transform: translateY(-100%)`?
+    // Let's check `captions.rs` logic again.
+    // align 5 -> 50% (Middle Center).
+    // align 2 -> Bottom Center.
+
+    // Simplification for CSS:
+    // If we use flexbox centering for horizontal.
+    // Vertical: 
+    // If settings.captionPosition == 'center', use `top-1/2 -translate-y-1/2`.
+    // If 'bottom', use `bottom-12`.
+    // The backend `y_pct` tries to be precise, but maybe we stick to the CSS classes based on `settings` for positioning container, 
+    // BUT we render the Lines structure from backend.
+
+    // Actually, `previewLayout` returns cues. A cue is a screen state.
+    // Using `y_pct` from backend allows us to support what the backend decided precisely.
+    // Let's try to use `settings.captionPosition` relative classes for now as they map closely, 
+    // unless we want pixel perfect match.
+    // The backend `y_pct` assumes specific margins.
+    // Let's stick to the previous `positionClass` logic but use the LINES from `activeCue`.
 
     const positionClass = cn(
       'absolute left-0 right-0 text-center px-8 transition-all duration-200',
@@ -271,31 +353,28 @@ export function CaptionEditor({
 
     return (
       <div className={positionClass}>
-        <div className="flex flex-wrap justify-center gap-[0.2em] max-w-full">
-          {activeSeg.words.map((word, idx) => {
-            const isWordActive = timeMs >= word.startMs && timeMs <= word.endMs
-            // Apply highlight color if word is active (karaoke style) OR if it's strictly the active word
-            // For non-karaoke styles (like Vibrant), usually the whole sentence is one color or user preference.
-            // Im implementing basic karaoke highlight logic here based on 'karaoke' setting or generic highlight.
-
-            const isHighlighted = settings.captionStyle === 'karaoke' ? isWordActive : false
-            // For 'vibrant' or others, logic might differ, but let's stick to the highlights config
-
-            const wordStyle = {
-              ...baseStyle,
-              color: isHighlighted ? settings.highlightWordColor : settings.textColor,
-            }
-
-            return (
-              <span key={idx} style={wordStyle} className="text-2xl font-bold leading-tight whitespace-nowrap">
-                {word.text}
-              </span>
-            )
-          })}
+        <div className="flex flex-col items-center gap-[0.1em]">
+          {activeCue.lines.map((line, lineIdx) => (
+            <div key={lineIdx} className="flex flex-wrap justify-center gap-[0.2em] max-w-full">
+              {line.words.map((word, wIdx) => {
+                const isHighlighted = word.isHighlighted
+                const wordStyle = {
+                  ...baseStyle,
+                  color: isHighlighted ? settings.highlightWordColor : settings.textColor,
+                }
+                return (
+                  <span key={wIdx} style={wordStyle} className="text-2xl font-bold leading-tight whitespace-nowrap">
+                    {word.text}
+                  </span>
+                )
+              })}
+            </div>
+          ))}
         </div>
       </div>
     )
   }
+
 
   return (
     <div className="flex bg-[#08090a] text-white h-full w-full overflow-hidden">
@@ -307,6 +386,7 @@ export function CaptionEditor({
             src={videoUrl}
             className="w-full h-full object-contain"
             onTimeUpdate={handleTimeUpdate}
+            onLoadedMetadata={handleLoadedMetadata}
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
             playsInline

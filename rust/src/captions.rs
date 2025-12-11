@@ -141,6 +141,174 @@ pub async fn generate_captions_single_pass(
     })
 }
 
+pub fn generate_preview_layout(
+    params: crate::types::PreviewLayoutParams
+) -> Result<crate::types::PreviewLayoutResult> {
+    let style = default_ass_style(
+        params.width, params.height,
+        params.font_name.as_deref(),
+        params.text_color.as_deref(),
+        params.highlight_word_color.as_deref(),
+        params.outline_color.as_deref(),
+        params.glow_effect,
+        params.position.as_deref()
+    );
+
+    let mut cues = Vec::new();
+    
+    // Determine Y position as percentage for frontend
+    // In ASS, we calculated margin_v. 
+    // If align is 5 (center), y_pct is 50.
+    // If align is 2 (bottom), y_pct is (100 - margin_pct).
+    // Let's reconstruct consistent pct from style.
+    let y_pct = if style.align == 5 {
+        50.0
+    } else {
+        // margin_v was calculated from pct_h
+        // margin_v = frame_h * (pct / 100)
+        // so pct = (margin_v / frame_h) * 100
+        let margin_pct = (style.margin_v as f32 / params.height as f32) * 100.0;
+        match style.align {
+             8 => margin_pct, // Top aligned, margin from top
+             _ => 100.0 - margin_pct, // Bottom aligned (2), margin from bottom
+        }
+    };
+
+    if params.karaoke {
+        let phrases = coalesce_phrases(&params.segments);
+        // let white_bgr = bgr_from_aa_bgrr(&style.primary); 
+        // let hi_bgr    = bgr_from_aa_bgrr(&style.highlight);
+
+
+        for ph in phrases {
+            let tokens_upper = normalize_tokens(&ph.spans);
+            let segments = split_phrase_for_width(&tokens_upper, &ph.spans, params.width, style.font_size);
+
+            for (segment_tokens, segment_spans) in segments {
+                let windows = contiguous_cs_windows(&segment_spans);
+
+                for (i, (cs0, cs1)) in windows.iter().enumerate() {
+                    let start_ms = (*cs0 as u64) * 10;
+                    let end_ms = (*cs1 as u64) * 10;
+                    
+                    // In karaoke, each window highlights one word (index i)
+                    // The segment_tokens correspond to segment_spans.
+                    // But wait, split_phrase_for_width returns tokens that match spans.
+                    
+                    let mut preview_words = Vec::new();
+                    for (w_idx, token) in segment_tokens.iter().enumerate() {
+                         preview_words.push(crate::types::PreviewWord {
+                             text: token.clone(),
+                             is_highlighted: w_idx == i,
+                         });
+                    }
+
+                    cues.push(crate::types::PreviewCue {
+                        start_ms,
+                        end_ms,
+                        lines: vec![crate::types::PreviewLine { words: preview_words }],
+                        y_pct,
+                    });
+                }
+            }
+        }
+    } else {
+        let phrases = coalesce_phrases(&params.segments);
+        let mut hl_state = HighlightState::new(&params.segments);
+
+        for (p_idx, phrase) in phrases.iter().enumerate() {
+            let tokens_upper = normalize_tokens(&phrase.spans);
+
+            let segments = if style.align == 5 {
+                split_phrase_multiline(&tokens_upper, &phrase.spans, params.width, style.font_size)
+            } else {
+                split_phrase_for_width(&tokens_upper, &phrase.spans, params.width, style.font_size)
+            };
+
+            for (segment_tokens, segment_spans) in segments {
+                let segment_tokens_orig = original_tokens(&segment_spans);
+                let start_ms = segment_spans.first().unwrap().start_ms;
+                let end_ms   = segment_spans.last().unwrap().end_ms;
+
+                let hi_opt = choose_highlight_idx(&segment_tokens_orig, &segment_spans, p_idx, &mut hl_state);
+                let hi_idx = hi_opt.unwrap_or(usize::MAX);
+
+                // Reconstruct lines structure
+                // For standard: it's usually 1 line, or 2 if assemble_colored_two_lines forces break?
+                // actually assemble_colored_two_lines doesn't Force break, it takes line1_count.
+                // But split_phrase_for_width produces single lines usually?
+                // Let's check split_phrase_for_width... it seems to produce segments that fit in width.
+                // Wait, logic in build_ass_document call to assemble_colored_two_lines passed usize::MAX as break index.
+                // So split_phrase_for_width produces 1 line per segment.
+                
+                // For storyteller (split_phrase_multiline), it produces segments but we passed chunks.
+                // The chunk needs further wrapping?
+                // `assemble_multiline` does wrapping based on `max_chars_per_line`.
+                // We need to replicate `assemble_multiline` wrapping logic here to determine lines.
+                
+                let est_char_width = (style.font_size as f32 * 0.7).max(1.0);
+                
+                let lines_structure = if style.align == 5 {
+                     // Storyteller logic
+                     let max_chars = ((params.width as f32 * 0.85) / est_char_width).floor() as usize; 
+                     let total_chars: usize = segment_tokens.iter().map(|t| t.len()).sum();
+                     let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
+                     let min_chars = 25.min(max_chars).max(1);
+                     let wrapping_width = soft_target.clamp(min_chars, max_chars);
+                     
+                     // Perform wrapping
+                     let mut lines = Vec::new();
+                     let mut current_line_words = Vec::new();
+                     let mut line_len = 0;
+
+                     for (i, token) in segment_tokens.iter().enumerate() {
+                         let t_len = token.len(); // raw length
+                         // Note: assemble_multiline counts escaped length, we use raw here which is close enough or better
+                         
+                         if line_len > 0 && line_len + t_len + 1 > wrapping_width {
+                             lines.push(crate::types::PreviewLine { words: current_line_words });
+                             current_line_words = Vec::new();
+                             line_len = 0;
+                         } else if line_len > 0 {
+                             line_len += 1; // space
+                         }
+                         
+                         current_line_words.push(crate::types::PreviewWord {
+                             text: token.clone(),
+                             is_highlighted: i == hi_idx,
+                         });
+                         line_len += t_len;
+                     }
+                     if !current_line_words.is_empty() {
+                         lines.push(crate::types::PreviewLine { words: current_line_words });
+                     }
+                     lines
+                } else {
+                    // Standard logic (single line per segment usually)
+                    let mut words = Vec::new();
+                    for (i, token) in segment_tokens.iter().enumerate() {
+                        words.push(crate::types::PreviewWord {
+                            text: token.clone(),
+                            is_highlighted: i == hi_idx,
+                        });
+                    }
+                    vec![crate::types::PreviewLine { words }]
+                };
+
+                cues.push(crate::types::PreviewCue {
+                    start_ms,
+                    end_ms,
+                    lines: lines_structure,
+                    y_pct,
+                });
+            }
+        }
+    }
+
+    Ok(crate::types::PreviewLayoutResult { cues })
+}
+
+
 async fn optimized_multi_format_encode(
     id: &str,
     input_video: &str,
