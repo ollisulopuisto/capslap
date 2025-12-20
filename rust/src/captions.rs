@@ -920,12 +920,10 @@ fn preprocess_hyphenated_tokens(tokens: &[String], spans: &[WordSpan]) -> (Vec<S
         if token.contains('-') && token.len() > 3 { // Only split if length meaningful
             let parts: Vec<&str> = token.split('-').collect();
             let count = parts.len();
+            
+            // First pass: collect the actual string parts we want to use
+            let mut sub_tokens = Vec::new();
             for (i, part) in parts.iter().enumerate() {
-                // If it's empty (trailing hyphen?), skip unless it renders oddly.
-                // "FOO-" splits to "FOO", "" -> we want "FOO-"
-                // Actually split('-') on "FOO-BAR" gives "FOO", "BAR".
-                // We want to attach hyphen to the first part.
-                
                 let mut text = part.to_string();
                 // Add hyphen back if this isn't the last part
                 if i < count - 1 {
@@ -933,10 +931,46 @@ fn preprocess_hyphenated_tokens(tokens: &[String], spans: &[WordSpan]) -> (Vec<S
                 }
                 
                 if !text.is_empty() {
-                    new_tokens.push(text);
-                    new_spans.push(span.clone());
+                    sub_tokens.push(text);
                 }
             }
+            
+            // Second pass: distribute time proportionally
+            let total_len: usize = sub_tokens.iter().map(|t| t.len()).sum();
+            let total_dur = (span.end_ms - span.start_ms) as f64;
+            let mut current_start = span.start_ms as f64;
+            
+            if total_len > 0 {
+                for (i, sub_token) in sub_tokens.iter().enumerate() {
+                    let len = sub_token.len();
+                    // Calculate duration for this part
+                    // Use f64 for precision, accumulate error? 
+                    // Simple proportion:
+                    let fraction = len as f64 / total_len as f64;
+                    let part_dur = total_dur * fraction;
+                    
+                    let s_ms = current_start.round() as u64;
+                    let e_ms = if i == sub_tokens.len() - 1 {
+                        span.end_ms // Ensure last one aligns exactly with end
+                    } else {
+                        (current_start + part_dur).round() as u64
+                    };
+                    
+                    new_tokens.push(sub_token.clone());
+                    new_spans.push(WordSpan {
+                        start_ms: s_ms,
+                        end_ms: e_ms,
+                        text: sub_token.clone(),
+                    });
+                    
+                    current_start += part_dur;
+                }
+            } else {
+                // Should not happen if filtered empty, but fallback
+                new_tokens.push(token.clone());
+                new_spans.push(span.clone());
+            }
+
         } else {
             new_tokens.push(token.clone());
             new_spans.push(span.clone());
@@ -1663,5 +1697,54 @@ fn hex_to_ass_color(hex: &str) -> String {
         format!("&H00{}{}{}", b, g, r) // ASS uses AABBGGRR format
     } else {
         "&H00FFFFFF".into() // Default to white if invalid hex
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_preprocess_hyphenated_tokens_splits_time() {
+        let span = WordSpan {
+            start_ms: 0,
+            end_ms: 1000,
+            text: "FOO-BAR".to_string(),
+        };
+        let tokens = vec!["FOO-BAR".to_string()];
+        let spans = vec![span];
+
+        let (new_tokens, new_spans) = preprocess_hyphenated_tokens(&tokens, &spans);
+
+        assert_eq!(new_tokens.len(), 2);
+        assert_eq!(new_tokens[0], "FOO-");
+        assert_eq!(new_tokens[1], "BAR");
+
+        // "FOO-BAR" has 7 chars.
+        // "FOO-" is 4 chars.
+        // "BAR" is 3 chars.
+        // Duration 1000ms.
+        // Part 1: 1000 * 4/7 = 571ms.
+        // Part 2: 1000 * 3/7 = 428ms.
+        
+        let s0 = new_spans[0].start_ms;
+        let e0 = new_spans[0].end_ms;
+        let s1 = new_spans[1].start_ms;
+        let e1 = new_spans[1].end_ms;
+
+        println!("Part 1 ({:?}): {} - {}", new_tokens[0], s0, e0);
+        println!("Part 2 ({:?}): {} - {}", new_tokens[1], s1, e1);
+
+        assert_eq!(s0, 0);
+        // We expect sequential times
+        assert!(e0 > 0);
+        assert_eq!(s1, e0); // Start of next = End of previous
+        assert_eq!(e1, 1000);
+        
+        // Check approximate proportionality
+        let d0 = e0 - s0;
+        let d1 = e1 - s1;
+        assert!(d0 > d1); // 4 chars > 3 chars
+        assert!((d0 as i64 - 571).abs() < 5);
     }
 }
