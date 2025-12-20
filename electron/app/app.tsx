@@ -607,22 +607,31 @@ export default function App() {
       // Save adjusted captions first
       await window.rust.call('saveCaptions', {
         videoPath: editorVideoPath,
-        segments: segments,
+        segments: segments.map((seg) => ({
+          ...seg,
+          startMs: Math.round(seg.startMs),
+          endMs: Math.round(seg.endMs),
+          words: seg.words.map((w) => ({
+            ...w,
+            startMs: Math.round(w.startMs),
+            endMs: Math.round(w.endMs),
+          })),
+        })),
       })
 
       await window.rust.call(
         'burn',
         {
           inputVideo: editorVideoPath,
-          segments: segments.map(seg => ({
+          segments: segments.map((seg) => ({
             ...seg,
             startMs: Math.round(seg.startMs),
             endMs: Math.round(seg.endMs),
-            words: seg.words.map(w => ({
+            words: seg.words.map((w) => ({
               ...w,
               startMs: Math.round(w.startMs),
-              endMs: Math.round(w.endMs)
-            }))
+              endMs: Math.round(w.endMs),
+            })),
           })),
           exportFormats: videoSettings.exportFormats,
           karaoke: videoSettings.captionStyle === 'karaoke',
@@ -836,8 +845,6 @@ export default function App() {
         onDrop={handleDrop}
       >
         <Toaster />
-
-
 
         {isDragOver && (
           <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">

@@ -315,7 +315,7 @@ export function CaptionEditor({
     // We can position absolutely using top: X%
     // If align was center (50%), we probably want to translate-y -50%?
     // The backend `y_pct` logic:
-    // If align 5: y_pct=50. 
+    // If align 5: y_pct=50.
     // If align 2: y_pct = 100 - margin_pct.
     // CSS "top: 50%" puts the TOP edge at 50%. Centering requires transform.
     // But ASS pos(x,y) with align 5 means the center of the text is at (x,y).
@@ -329,15 +329,15 @@ export function CaptionEditor({
 
     // Simplification for CSS:
     // If we use flexbox centering for horizontal.
-    // Vertical: 
+    // Vertical:
     // If settings.captionPosition == 'center', use `top-1/2 -translate-y-1/2`.
     // If 'bottom', use `bottom-12`.
-    // The backend `y_pct` tries to be precise, but maybe we stick to the CSS classes based on `settings` for positioning container, 
+    // The backend `y_pct` tries to be precise, but maybe we stick to the CSS classes based on `settings` for positioning container,
     // BUT we render the Lines structure from backend.
 
     // Actually, `previewLayout` returns cues. A cue is a screen state.
     // Using `y_pct` from backend allows us to support what the backend decided precisely.
-    // Let's try to use `settings.captionPosition` relative classes for now as they map closely, 
+    // Let's try to use `settings.captionPosition` relative classes for now as they map closely,
     // unless we want pixel perfect match.
     // The backend `y_pct` assumes specific margins.
     // Let's stick to the previous `positionClass` logic but use the LINES from `activeCue`.
@@ -374,7 +374,6 @@ export function CaptionEditor({
       </div>
     )
   }
-
 
   return (
     <div className="flex bg-[#08090a] text-white h-full w-full overflow-hidden">
@@ -477,6 +476,11 @@ export function CaptionEditor({
                   isActive ? 'border-primary bg-primary/10 ring-1 ring-primary/20' : 'hover:border-primary/30'
                 )}
                 onClick={() => seekTo(seg.startMs)}
+                onDoubleClick={(e) => {
+                  e.stopPropagation()
+                  setEditingSegmentIndex(idx)
+                  setEditText(seg.text)
+                }}
               >
                 <div className="flex items-start justify-between">
                   <span className="text-xs font-mono text-muted-foreground bg-black/20 px-1.5 py-0.5 rounded">
