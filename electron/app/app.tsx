@@ -604,6 +604,12 @@ export default function App() {
     setExportStatus('Burning captions...')
 
     try {
+      // Save adjusted captions first
+      await window.rust.call('saveCaptions', {
+        videoPath: editorVideoPath,
+        segments: segments,
+      })
+
       await window.rust.call(
         'burn',
         {
@@ -649,6 +655,30 @@ export default function App() {
       return
     }
 
+    // Prepare ID and paths early for checking/loading
+    const requestId = crypto.randomUUID()
+    const video = selectedVideos[0]
+
+    try {
+      // Check for existing captions
+      const result = (await window.rust.call('loadCaptions', { videoPath: video })) as {
+        segments: CaptionSegment[] | null
+      }
+
+      if (result && result.segments && result.segments.length > 0) {
+        console.log('Loaded segments from disk', result.segments)
+        setEditorSegments(result.segments)
+        setEditorVideoPath(video)
+        setEditorJobId(requestId)
+        setIsEditorOpen(true)
+        toast.info('Loaded saved captions layout!')
+        return
+      }
+    } catch (e) {
+      console.warn('Failed to load existing captions', e)
+      // Continue to generation if load fails
+    }
+
     if (!apiKey && videoSettings.selectedModel === 'whisper-1') {
       setShouldGenerateAfterApiKey(true)
       setIsApiKeySettingsOpen(true)
@@ -662,11 +692,8 @@ export default function App() {
 
       console.log('Starting transcription...')
 
-      const requestId = crypto.randomUUID()
       setCurrentRequestId(requestId)
       setEditorJobId(requestId)
-
-      const video = selectedVideos[0]
       setEditorVideoPath(video)
 
       if (selectedVideos.length > 1) {

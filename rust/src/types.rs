@@ -245,3 +245,23 @@ pub struct PreviewWord {
     pub text: String,
     pub is_highlighted: bool,
 }
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCaptionsParams {
+    pub video_path: String,
+    pub segments: Vec<CaptionSegment>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadCaptionsParams {
+    pub video_path: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadCaptionsResult {
+    pub segments: Option<Vec<CaptionSegment>>,
+}
+

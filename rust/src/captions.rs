@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use crate::rpc::RpcEvent;
-use crate::types::{CaptionSegment, WordSpan, GenerateCaptionsParams, GenerateCaptionsResult, CaptionedVideoResult, ExtractAudioParams, TranscribeSegmentsParams, TranscribeSegmentsResult, BurnCaptionsParams};
+use crate::types::{CaptionSegment, WordSpan, GenerateCaptionsParams, GenerateCaptionsResult, CaptionedVideoResult, ExtractAudioParams, TranscribeSegmentsParams, TranscribeSegmentsResult, BurnCaptionsParams, SaveCaptionsParams, LoadCaptionsParams, LoadCaptionsResult};
 use crate::video::probe;
 use crate::{audio, whisper};
 use std::{fs, path::PathBuf};
@@ -307,6 +307,105 @@ pub fn generate_preview_layout(
 
     Ok(crate::types::PreviewLayoutResult { cues })
 }
+
+pub fn save_captions(params: SaveCaptionsParams) -> Result<()> {
+    let video_path = std::path::Path::new(&params.video_path);
+    // Sidecar file: video.mp4 -> video.capslap.json
+    // Let's sticker to replacing extension to keep it clean, OR append if we want to be safe against collisions (vid.mp4 vs vid.mov).
+    // The plan said: <video_path>.capslap.json. 
+    // If video is "movie.mp4", "movie.capslap.json" is fine.
+    // But if I have "movie.mp4" and "movie.avi", they would clash.
+    // Let's append ".capslap.json" to the full filename.
+    let _json_path = video_path.with_extension("capslap.json"); // Kept variable but underscored to suppress warning if we don't use it, but wait, we use `json_path` (the other one) below.
+    // Actually the line 314 was unused because I shadowed it with line 321 `let json_path = ...`.
+    // So I should just remove line 314.
+
+    
+    // If the video path didn't have an extension, with_extension replaces the last component? 
+    // No, it replaces extension. If video is /path/to/vid, it becomes /path/to/vid.capslap.json
+    // If video is /path/to/vid.mp4, it becomes /path/to/vid.capslap.json.
+    // Wait, if I want video.mp4.capslap.json, I should just append.
+    // Let's stick to replacing extension to keep it clean, OR append if we want to be safe against collisions (vid.mp4 vs vid.mov).
+    // The plan said: <video_path>.capslap.json. 
+    // If video is "movie.mp4", "movie.capslap.json" is fine.
+    // But if I have "movie.mp4" and "movie.avi", they would clash.
+    // Let's append ".capslap.json" to the full filename.
+    let json_path = format!("{}.capslap.json", params.video_path);
+    
+    let json = serde_json::to_string_pretty(&params.segments)?;
+    fs::write(&json_path, json)?;
+    
+    Ok(())
+}
+
+pub fn load_captions(params: LoadCaptionsParams) -> Result<LoadCaptionsResult> {
+    let json_path = format!("{}.capslap.json", params.video_path);
+    let path = std::path::Path::new(&json_path);
+    
+    if path.exists() {
+        let content = fs::read_to_string(path)?;
+        let segments: Vec<CaptionSegment> = serde_json::from_str(&content)?;
+        Ok(LoadCaptionsResult { segments: Some(segments) })
+    } else {
+        Ok(LoadCaptionsResult { segments: None })
+    }
+}
+
+#[cfg(test)]
+#[cfg(test)]
+mod tests_persistence {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_save_and_load_captions() -> Result<()> {
+        let video_file = NamedTempFile::new()?;
+        let video_path = video_file.path().to_string_lossy().to_string();
+        
+        let segments = vec![
+            CaptionSegment {
+                start_ms: 1000,
+                end_ms: 2000,
+                text: "Hello world".to_string(),
+                words: vec![],
+            },
+            CaptionSegment {
+                start_ms: 2500,
+                end_ms: 3500,
+                text: "Testing save load".to_string(),
+                words: vec![],
+            }
+        ];
+        
+        // Save
+        save_captions(SaveCaptionsParams {
+            video_path: video_path.clone(),
+            segments: segments.clone(),
+        })?;
+        
+        // Check file exists
+        let json_path = format!("{}.capslap.json", video_path);
+        assert!(std::path::Path::new(&json_path).exists());
+        
+        // Load
+        let loaded = load_captions(LoadCaptionsParams {
+            video_path: video_path.clone(),
+        })?;
+        
+        assert!(loaded.segments.is_some());
+        let loaded_segments = loaded.segments.unwrap();
+        assert_eq!(loaded_segments.len(), 2);
+        assert_eq!(loaded_segments[0].text, "Hello world");
+        assert_eq!(loaded_segments[1].end_ms, 3500);
+        
+        // Cleanup
+        let _ = fs::remove_file(json_path);
+        
+        Ok(())
+    }
+}
+
 
 
 async fn optimized_multi_format_encode(

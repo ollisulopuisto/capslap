@@ -222,6 +222,24 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                 Err(e) => write_err(format!("Invalid params for previewLayout: {}", e)),
             }
         }
+        "saveCaptions" => {
+            match serde_json::from_value::<core::types::SaveCaptionsParams>(r.params) {
+                Ok(p) => match captions::save_captions(p) {
+                    Ok(_) => write_ok(serde_json::json!({ "ok": true })),
+                    Err(e) => write_err(e.to_string()),
+                },
+                Err(e) => write_err(format!("Invalid params for saveCaptions: {}", e)),
+            }
+        }
+        "loadCaptions" => {
+            match serde_json::from_value::<core::types::LoadCaptionsParams>(r.params) {
+                Ok(p) => match captions::load_captions(p) {
+                    Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
+                    Err(e) => write_err(e.to_string()),
+                },
+                Err(e) => write_err(format!("Invalid params for loadCaptions: {}", e)),
+            }
+        }
         _ => write_err(format!("Unknown method: {}", r.method)),
 
     }
