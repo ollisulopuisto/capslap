@@ -608,7 +608,16 @@ export default function App() {
         'burn',
         {
           inputVideo: editorVideoPath,
-          segments: segments,
+          segments: segments.map(seg => ({
+            ...seg,
+            startMs: Math.round(seg.startMs),
+            endMs: Math.round(seg.endMs),
+            words: seg.words.map(w => ({
+              ...w,
+              startMs: Math.round(w.startMs),
+              endMs: Math.round(w.endMs)
+            }))
+          })),
           exportFormats: videoSettings.exportFormats,
           karaoke: videoSettings.captionStyle === 'karaoke',
           fontName: getFontName(videoSettings.selectedFont),
