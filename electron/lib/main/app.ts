@@ -108,17 +108,34 @@ function registerResourcesProtocol() {
 
         const response = await net.fetch(pathToFileURL(filePath).toString())
 
-        if (relativePath.endsWith('.mp4') || relativePath.endsWith('.mov')) {
+        // Check for video extensions to serve with correct content type
+        const ext = relativePath.split('.').pop()?.toLowerCase()
+        const videoExtensions = ['mp4', 'mov', 'mkv', 'avi', 'webm', 'wmv', 'flv', 'mpeg', 'mpg', 'm4v', '3gp', 'ts']
+
+        if (ext && videoExtensions.includes(ext)) {
           const buffer = await response.arrayBuffer()
-          const contentType = relativePath.endsWith('.mov') ? 'video/quicktime' : 'video/mp4'
+
+          let contentType = 'video/mp4' // Default fallback
+          switch (ext) {
+            case 'mov': contentType = 'video/quicktime'; break;
+            case 'webm': contentType = 'video/webm'; break;
+            case 'avi': contentType = 'video/x-msvideo'; break;
+            case 'wmv': contentType = 'video/x-ms-wmv'; break;
+            case 'flv': contentType = 'video/x-flv'; break;
+            case 'mpeg':
+            case 'mpg': contentType = 'video/mpeg'; break;
+            case '3gp': contentType = 'video/3gpp'; break;
+            case 'ts': contentType = 'video/mp2t'; break;
+            // mp4, m4v stay as video/mp4
+          }
 
           return new Response(buffer, {
             status: 200,
             headers: {
               'Content-Type': contentType,
+              'Content-Length': buffer.byteLength.toString(),
               'Accept-Ranges': 'bytes',
               'Access-Control-Allow-Origin': '*',
-              'Content-Length': buffer.byteLength.toString(),
             },
           })
         }

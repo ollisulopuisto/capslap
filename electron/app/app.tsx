@@ -508,6 +508,12 @@ export default function App() {
       try {
         console.log(`Generating preview for template: ${template.id}`)
 
+        // If this is the currently selected template, use the current settings (overrides)
+        // Otherwise, use the template's defaults
+        const isSelected = template.id === videoSettings.selectedTemplate
+        const position = isSelected ? videoSettings.captionPosition : template.position
+        const captionStyle = isSelected ? videoSettings.captionStyle : template.captionStyle
+
         const result = (await (window as any).rust.call('generatePreviewFrame', {
           inputVideo: videoPath,
           timestampMs: timestampMs,
@@ -524,9 +530,9 @@ export default function App() {
           // There is NO font_size in PreviewFrameParams!
           // Removing font_size or checking if it's needed? 
           // The Rust side `generate_preview_frame` might calculate it or use default?
-          position: template.position,
-          karaoke: template.captionStyle === 'karaoke' || template.captionStyle === 'karaoke-multiline',
-          multiline: template.captionStyle === 'karaoke-multiline',
+          position: position,
+          karaoke: captionStyle === 'karaoke' || captionStyle === 'karaoke-multiline',
+          multiline: captionStyle === 'karaoke-multiline',
           glowEffect: videoSettings.glowEffect,
           exportFormat: videoSettings.exportFormats && videoSettings.exportFormats.length > 0 ? videoSettings.exportFormats[0] : '9:16',
           outputSize: '1080p',
@@ -563,7 +569,11 @@ export default function App() {
     videoSettings.highlightWordColor,
     videoSettings.outlineColor,
     videoSettings.glowEffect,
-    videoSettings.cropStrategy
+    videoSettings.cropStrategy,
+    videoSettings.captionPosition,
+    videoSettings.captionStyle,
+    videoSettings.selectedTemplate,
+    videoSettings.exportFormats
   ])
 
 
@@ -613,7 +623,7 @@ export default function App() {
 
   const handleVideoSelect = async () => {
     try {
-      const paths = await window.rust.openFiles?.([{ name: 'Video Files', extensions: ['mp4', 'mov', 'mkv', 'avi'] }])
+      const paths = await window.rust.openFiles?.([{ name: 'Video Files', extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'wmv', 'flv', 'mpeg', 'mpg', 'm4v', '3gp', 'ts', '*'] }])
 
       if (paths && paths.length > 0) {
         const duplicates = paths.filter((path) => selectedVideos.includes(path))
@@ -862,24 +872,7 @@ export default function App() {
     const files = Array.from(e.dataTransfer.files)
 
     if (files.length > 0) {
-      const supportedExtensions = ['mp4', 'mov', 'mkv', 'avi']
-
-      const validFiles = files.filter((file) => {
-        const fileExtension = file.name.split('.').pop()?.toLowerCase()
-        return fileExtension && supportedExtensions.includes(fileExtension)
-      })
-      const invalidFiles = files.filter((file) => {
-        const fileExtension = file.name.split('.').pop()?.toLowerCase()
-        return fileExtension && !supportedExtensions.includes(fileExtension)
-      })
-
-      if (invalidFiles.length > 0) {
-        toast.error(`Unsupported files format:`, {
-          description: `Supported: ${supportedExtensions.join(', ')}`,
-        })
-      }
-
-      const filesPaths = validFiles.map((file) => window.rust.getFilePath(file)).filter((path) => path !== null)
+      const filesPaths = files.map((file) => window.rust.getFilePath(file)).filter((path) => path !== null)
 
       if (filesPaths && filesPaths.length > 0) {
         const duplicates = filesPaths.filter((path) => selectedVideos.includes(path))
@@ -945,11 +938,9 @@ export default function App() {
                 <div className="flex items-center justify-center gap-2 text-primary/70 text-sm">
                   <span>Supported:</span>
                   <div className="flex gap-1">
-                    {['MP4', 'MOV', 'MKV', 'AVI'].map((format) => (
-                      <span key={format} className="px-1.5 py-0.5 bg-primary/20 rounded text-xs font-mono">
-                        {format}
-                      </span>
-                    ))}
+                    <span className="px-1.5 py-0.5 bg-primary/20 rounded text-xs font-mono">
+                      All Video Formats
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1388,11 +1379,9 @@ export default function App() {
                         <p className="text-muted-foreground mb-4">Click to select or drag and drop files</p>
                         <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
                           <span>Supported:</span>
-                          {['MP4', 'MOV', 'MKV', 'AVI'].map((format) => (
-                            <span key={format} className="px-1.5 py-0.5 bg-muted rounded text-xs font-mono">
-                              {format}
-                            </span>
-                          ))}
+                          <span className="px-1.5 py-0.5 bg-muted rounded text-xs font-mono">
+                            All Video Formats
+                          </span>
                         </div>
                       </div>
                     </div>

@@ -99,6 +99,7 @@ export function CaptionEditor({
   // New state for layout
   const [previewCues, setPreviewCues] = useState<PreviewCue[]>([])
   const [videoDims, setVideoDims] = useState<{ width: number; height: number } | null>(null)
+  const [hasPlaybackError, setHasPlaybackError] = useState(false)
 
   // Convert video path to renderable URL
   const videoUrl = videoPath.startsWith('/') ? `res://local${videoPath}` : videoPath
@@ -357,8 +358,25 @@ export function CaptionEditor({
             onLoadedMetadata={handleLoadedMetadata}
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
+            onError={() => setHasPlaybackError(true)}
             playsInline
           />
+
+          {/* Playback Error Overlay */}
+          {hasPlaybackError && (
+            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/80 text-center p-6">
+              <div className="bg-yellow-500/10 text-yellow-500 p-4 rounded-full mb-4">
+                <Zap className="w-8 h-8" />
+              </div>
+              <h3 className="text-lg font-bold text-white mb-2">Preview Unavailable</h3>
+              <p className="text-sm text-gray-400 max-w-[250px]">
+                This video format cannot be played in the preview player.
+              </p>
+              <p className="text-xs text-gray-500 mt-4 max-w-[250px]">
+                Don't worry! You can still edit captions and the final video will generate correctly.
+              </p>
+            </div>
+          )}
 
           {/* Static Preview Image Layer */}
           {/* We show this when:
