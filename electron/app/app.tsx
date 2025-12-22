@@ -101,8 +101,8 @@ const showErrorToast = (error: any, count: number = 1) => {
 }
 
 interface Template {
-  id: 'oneliner' | 'karaoke' | 'vibrant' | 'storyteller'
-  captionStyle: 'karaoke' | 'oneliner' | 'vibrant' | 'storyteller'
+  id: 'oneliner' | 'karaoke' | 'karaoke-multiline' | 'vibrant' | 'storyteller'
+  captionStyle: 'karaoke' | 'karaoke-multiline' | 'oneliner' | 'vibrant' | 'storyteller'
   name: string
   src: string | null
   textColor: string
@@ -236,11 +236,13 @@ function TemplatePreviewCard({
   isSelected,
   onSelect,
   previewFrame, // New prop
+  isBurnedPreview,
 }: {
   template: Template
   isSelected: boolean
   onSelect: () => void
   previewFrame?: string | null // Base64 image data
+  isBurnedPreview?: boolean
 }) {
   const [isHovered, setIsHovered] = React.useState(false)
 
@@ -301,8 +303,8 @@ function TemplatePreviewCard({
           {previewFrame ? (
             <div className="relative w-full h-full">
               <img src={previewFrame} className="w-full h-full object-cover" alt="Preview" />
-              {/* Caption Overlay */}
-              {renderCaptionPreview()}
+              {/* Caption Overlay - only show if not burned preview */}
+              {!isBurnedPreview && renderCaptionPreview()}
             </div>
           ) : (
             <video
@@ -462,7 +464,8 @@ export default function App() {
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null)
   const [exportProgress, setExportProgress] = useState(0)
   const [exportStatus, setExportStatus] = useState('')
-  const [previewFrame, setPreviewFrame] = useState<string | null>(null) // State for extracted frame
+  const [previewFrames, setPreviewFrames] = useState<Record<string, string>>({}) // Map of template ID to base64 image
+  const [rawPreviewFrame, setRawPreviewFrame] = useState<string | null>(null) // Fallback raw frame
 
   // Editor state
   const [isEditorOpen, setIsEditorOpen] = useState(false)
@@ -486,6 +489,83 @@ export default function App() {
     }
     return undefined
   }, [currentRequestId])
+
+  const generatePreviews = async (videoPath: string, segments: CaptionSegment[]) => {
+    if (!videoPath || !segments || segments.length === 0) return
+
+    // Use the start time of the first segment for the preview
+    const firstSegment = segments[0]
+    // Use middle of the segment for better context
+    const timestampMs = firstSegment.startMs + (firstSegment.endMs - firstSegment.startMs) / 2
+
+    console.log('Generating previews for timestamp:', timestampMs)
+
+    // Generate preview for each template
+    const newPreviewFrames: Record<string, string> = {}
+
+    // Process sequentially to avoid overwhelming the backend/FFmpeg
+    for (const template of templates) {
+      try {
+        console.log(`Generating preview for template: ${template.id}`)
+
+        const result = (await (window as any).rust.call('generatePreviewFrame', {
+          inputVideo: videoPath,
+          timestampMs: timestampMs,
+          segments: [firstSegment], // Only pass the first segment for speed
+          targetWidth: 1920, // Preview width
+          // Rust struct expects camelCase
+          fontName: getFontName(videoSettings.selectedFont),
+          textColor: videoSettings.textColor,
+          highlightWordColor: videoSettings.highlightWordColor,
+          outlineColor: videoSettings.outlineColor,
+          fontSize: 60, // Approximate size for 1080p -> This is missing in Rust struct? No, let's check. 
+          // WAIT, looking at types.rs:
+          // pub font_name: Option<String>,
+          // There is NO font_size in PreviewFrameParams!
+          // Removing font_size or checking if it's needed? 
+          // The Rust side `generate_preview_frame` might calculate it or use default?
+          position: template.position,
+          karaoke: template.captionStyle === 'karaoke' || template.captionStyle === 'karaoke-multiline',
+          multiline: template.captionStyle === 'karaoke-multiline',
+          glowEffect: videoSettings.glowEffect,
+          exportFormat: videoSettings.exportFormats && videoSettings.exportFormats.length > 0 ? videoSettings.exportFormats[0] : '9:16',
+          outputSize: '1080p',
+          cropStrategy: videoSettings.cropStrategy,
+          fitMode: 'cover', // Added missing param if needed, defaults to cover
+        })) as { imageData: string }
+
+        if (result.imageData) {
+          newPreviewFrames[template.id] = result.imageData
+        }
+      } catch (e) {
+        console.error(`Failed to generate preview for ${template.id}`, e)
+      }
+    }
+
+    setPreviewFrames(newPreviewFrames)
+  }
+
+  // Update previews when editor segments or RELEVANT video settings change
+  useEffect(() => {
+    if (editorSegments.length > 0 && editorVideoPath) {
+      const timer = setTimeout(() => {
+        generatePreviews(editorVideoPath, editorSegments)
+      }, 500) // Debounce 500ms to avoid rapid regeneration while picking color
+
+      return () => clearTimeout(timer)
+    }
+  }, [
+    editorSegments,
+    editorVideoPath,
+    // Add relevant settings dependencies
+    videoSettings.selectedFont,
+    videoSettings.textColor,
+    videoSettings.highlightWordColor,
+    videoSettings.outlineColor,
+    videoSettings.glowEffect,
+    videoSettings.cropStrategy
+  ])
+
 
   useEffect(() => {
     const savedSettings = localStorage.getItem('settings-v3')
@@ -560,7 +640,7 @@ export default function App() {
               imageData: string
             }
             if (result && result.imageData) {
-              setPreviewFrame(result.imageData)
+              setRawPreviewFrame(result.imageData)
             }
           } catch (e) {
             console.error('Failed to extract frame preview', e)
@@ -634,7 +714,8 @@ export default function App() {
             })),
           })),
           exportFormats: videoSettings.exportFormats,
-          karaoke: videoSettings.captionStyle === 'karaoke',
+          karaoke: videoSettings.captionStyle === 'karaoke' || videoSettings.captionStyle === 'karaoke-multiline',
+          multiline: videoSettings.captionStyle === 'karaoke-multiline',
           fontName: getFontName(videoSettings.selectedFont),
           textColor: videoSettings.textColor,
           highlightWordColor: videoSettings.highlightWordColor,
@@ -714,7 +795,8 @@ export default function App() {
         {
           inputVideo: video,
           exportFormats: videoSettings.exportFormats,
-          karaoke: videoSettings.captionStyle === 'karaoke',
+          karaoke: videoSettings.captionStyle === 'karaoke' || videoSettings.captionStyle === 'karaoke-multiline',
+          multiline: videoSettings.captionStyle === 'karaoke-multiline',
           fontName: getFontName(videoSettings.selectedFont),
           splitByWords: false,
           model: videoSettings.selectedModel,
@@ -824,7 +906,7 @@ export default function App() {
               imageData: string
             }
             if (result && result.imageData) {
-              setPreviewFrame(result.imageData)
+              setRawPreviewFrame(result.imageData)
             }
           } catch (e) {
             console.error('Failed to extract frame preview', e)
@@ -946,7 +1028,8 @@ export default function App() {
                     template={template}
                     isSelected={videoSettings.selectedTemplate === template.id}
                     onSelect={() => selectTemplate(template)}
-                    previewFrame={previewFrame}
+                    previewFrame={previewFrames[template.id] || rawPreviewFrame}
+                    isBurnedPreview={!!previewFrames[template.id]}
                   />
                 ))}
               </div>
@@ -965,15 +1048,16 @@ export default function App() {
                     <label className="text-xs text-muted-foreground mb-1 block">Style</label>
                     <Select
                       value={videoSettings.captionStyle}
-                      onValueChange={(value: 'karaoke' | 'oneliner' | 'vibrant' | 'storyteller') =>
-                        updateSettings({ captionStyle: value })
-                      }
+                      onValueChange={(
+                        value: 'karaoke' | 'karaoke-multiline' | 'oneliner' | 'vibrant' | 'storyteller'
+                      ) => updateSettings({ captionStyle: value })}
                     >
                       <SelectTrigger className="w-full h-8 text-xs">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="karaoke">Karaoke</SelectItem>
+                        <SelectItem value="karaoke-multiline">Karaoke (2 Lines)</SelectItem>
                         <SelectItem value="oneliner">Oneliner</SelectItem>
                         <SelectItem value="vibrant">Vibrant</SelectItem>
                         <SelectItem value="storyteller">Storyteller</SelectItem>
@@ -1280,7 +1364,8 @@ export default function App() {
               }}
               videoPath={editorVideoPath}
               settings={videoSettings}
-              previewFrame={previewFrame}
+              previewFrame={previewFrames[videoSettings.selectedTemplate] || rawPreviewFrame}
+              isBurnedPreview={!!previewFrames[videoSettings.selectedTemplate]}
             />
           ) : (
             <>
@@ -1367,8 +1452,7 @@ export default function App() {
                   ) : selectedVideos.length > 0 ? (
                     <>
                       <Zap className="w-5 h-5 mr-2" />
-                      Generate {selectedVideos.length * videoSettings.exportFormats?.length} video
-                      {selectedVideos.length * videoSettings.exportFormats?.length > 1 ? 's' : ''}
+                      Prepare video
                     </>
                   ) : (
                     <>

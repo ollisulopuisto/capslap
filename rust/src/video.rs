@@ -6,11 +6,17 @@ use tokio::io::AsyncBufReadExt;
 use std::process::Command;
 
 /// Get FFmpeg binary path synchronously (for use in sync functions)
-fn get_ffmpeg_path_sync() -> String {
+pub fn get_ffmpeg_path_sync() -> String {
     // Try to use cached path or default to "ffmpeg"
     // In sync context, we can't use the full async detection
     if let Ok(ffmpeg_path) = std::env::var("FFMPEG_PATH") {
-        return ffmpeg_path;
+        eprintln!("DEBUG: FFMPEG_PATH set to {}", ffmpeg_path);
+        let path = std::path::Path::new(&ffmpeg_path);
+        if path.exists() {
+            return ffmpeg_path;
+        } else {
+            eprintln!("DEBUG: FFMPEG_PATH points to non-existent file, falling back to auto-detection");
+        }
     }
 
     // Try bundled path next to the executable (production)
@@ -22,6 +28,7 @@ fn get_ffmpeg_path_sync() -> String {
                 "bin/ffmpeg"
             });
             if bundled.exists() {
+                eprintln!("DEBUG: Found bundled ffmpeg at {:?}", bundled);
                 return bundled.to_string_lossy().to_string();
             }
         }
@@ -37,10 +44,12 @@ fn get_ffmpeg_path_sync() -> String {
 
     for path in paths {
         if std::path::Path::new(path).exists() || which::which(path).is_ok() {
+            eprintln!("DEBUG: Found ffmpeg at {}", path);
             return path.to_string();
         }
     }
 
+    eprintln!("DEBUG: No ffmpeg found, falling back to 'ffmpeg'");
     "ffmpeg".to_string() // Fallback
 }
 

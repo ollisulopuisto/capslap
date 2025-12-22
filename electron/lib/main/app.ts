@@ -1,5 +1,6 @@
 import { BrowserWindow, shell, app, protocol, net, ipcMain, dialog } from 'electron'
 import { join } from 'path'
+import * as fs from 'node:fs'
 import { registerWindowIPC } from '@/lib/window/ipcEvents'
 import appIcon from '@/resources/build/icon.png?asset'
 import { pathToFileURL } from 'url'
@@ -93,14 +94,14 @@ function registerResourcesProtocol() {
           ]
 
           for (const path of possiblePaths) {
-            if (require('fs').existsSync(path)) {
+            if (fs.existsSync(path)) {
               filePath = path
               break
             }
           }
         }
 
-        if (!filePath || !require('fs').existsSync(filePath)) {
+        if (!filePath || !fs.existsSync(filePath)) {
           console.error('File not found:', filePath)
           return new Response('Resource not found', { status: 404 })
         }

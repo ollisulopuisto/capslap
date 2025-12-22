@@ -6,8 +6,8 @@ import { cn } from '@/lib/utils'
 
 // Types (mirrored from app.tsx for now to avoid circular deps)
 interface Template {
-  id: 'oneliner' | 'karaoke' | 'vibrant' | 'storyteller'
-  captionStyle: 'karaoke' | 'oneliner' | 'vibrant' | 'storyteller'
+  id: 'oneliner' | 'karaoke' | 'karaoke-multiline' | 'vibrant' | 'storyteller'
+  captionStyle: 'karaoke' | 'karaoke-multiline' | 'oneliner' | 'vibrant' | 'storyteller'
   name: string
   src: string | null
   textColor: string
@@ -68,9 +68,8 @@ interface CaptionEditorProps {
   videoPath: string
   settings: Settings
   previewFrame?: string | null
+  isBurnedPreview?: boolean
 }
-
-// ... (previous imports)
 
 interface PreviewCue {
   startMs: number
@@ -79,8 +78,6 @@ interface PreviewCue {
   yPct: number
 }
 
-// ... (existing interfaces)
-
 export function CaptionEditor({
   initialSegments,
   onBurn,
@@ -88,6 +85,7 @@ export function CaptionEditor({
   videoPath,
   settings,
   previewFrame,
+  isBurnedPreview,
 }: CaptionEditorProps) {
   const [segments, setSegments] = useState<CaptionSegment[]>(initialSegments)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -120,7 +118,8 @@ export function CaptionEditor({
           highlightWordColor: settings.highlightWordColor,
           outlineColor: settings.outlineColor,
           position: settings.captionPosition,
-          karaoke: settings.captionStyle === 'karaoke',
+          karaoke: settings.captionStyle === 'karaoke' || settings.captionStyle === 'karaoke-multiline',
+          multiline: settings.captionStyle === 'karaoke-multiline',
           glowEffect: settings.glowEffect,
         })) as { cues: PreviewCue[] }
 
@@ -295,6 +294,8 @@ export function CaptionEditor({
   }
 
   const renderPreviewOverlay = () => {
+
+
     const timeMs = currentTime * 1000
     // Find active cue from backend layout
     const activeCue = previewCues.find((c) => timeMs >= c.startMs && timeMs < c.endMs)
@@ -308,39 +309,6 @@ export function CaptionEditor({
       WebkitTextStroke: settings.outlineColor ? `2px ${settings.outlineColor}` : 'none',
       textShadow: settings.glowEffect ? `0 0 10px ${settings.highlightWordColor}` : 'none',
     }
-
-    // Use backend-provided Y percentage
-    // const topPct = activeCue.yPct
-
-    // We can position absolutely using top: X%
-    // If align was center (50%), we probably want to translate-y -50%?
-    // The backend `y_pct` logic:
-    // If align 5: y_pct=50.
-    // If align 2: y_pct = 100 - margin_pct.
-    // CSS "top: 50%" puts the TOP edge at 50%. Centering requires transform.
-    // But ASS pos(x,y) with align 5 means the center of the text is at (x,y).
-    // So yes, `top: ${topPct}%`, transform: `translateY(-50%)` if we assume center baseline?
-    // Wait, if alignment is bottom (2), ASS pos(x,y) means bottom-center of text is at (x,y).
-    // So if y_pct is 90%, we want bottom of text at 90%.
-    // So `top: ${topPct}%`, `transform: translateY(-100%)`?
-    // Let's check `captions.rs` logic again.
-    // align 5 -> 50% (Middle Center).
-    // align 2 -> Bottom Center.
-
-    // Simplification for CSS:
-    // If we use flexbox centering for horizontal.
-    // Vertical:
-    // If settings.captionPosition == 'center', use `top-1/2 -translate-y-1/2`.
-    // If 'bottom', use `bottom-12`.
-    // The backend `y_pct` tries to be precise, but maybe we stick to the CSS classes based on `settings` for positioning container,
-    // BUT we render the Lines structure from backend.
-
-    // Actually, `previewLayout` returns cues. A cue is a screen state.
-    // Using `y_pct` from backend allows us to support what the backend decided precisely.
-    // Let's try to use `settings.captionPosition` relative classes for now as they map closely,
-    // unless we want pixel perfect match.
-    // The backend `y_pct` assumes specific margins.
-    // Let's stick to the previous `positionClass` logic but use the LINES from `activeCue`.
 
     const positionClass = cn(
       'absolute left-0 right-0 text-center px-8 transition-all duration-200',
@@ -380,6 +348,7 @@ export function CaptionEditor({
       {/* Left: Video Player */}
       <div className="flex-1 relative bg-black flex flex-col justify-center items-center border-r border-white/10">
         <div className="relative w-full h-full max-h-full aspect-[9/16] max-w-md mx-auto bg-black">
+          {/* Video Player Render */}
           <video
             ref={videoRef}
             src={videoUrl}
@@ -389,14 +358,39 @@ export function CaptionEditor({
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
             playsInline
-            poster={previewFrame ? `data:image/png;base64,${previewFrame}` : undefined}
           />
 
-          {/* Overlay */}
-          <div className="absolute inset-0 pointer-events-none overflow-hidden">{renderPreviewOverlay()}</div>
+          {/* Static Preview Image Layer */}
+          {/* We show this when:
+              1. We have a preview frame
+              2. AND (we haven't started "previewing" yet OR we are paused at the very start)
+              This ensures the user sees the generated high-quality thumbnail initially.
+          */}
+          {previewFrame && (!hasPreviewed || (!isPlaying && currentTime < 0.1)) && (
+            <div className="absolute inset-0 z-10 bg-black">
+              <img
+                src={previewFrame}
+                className="w-full h-full object-contain"
+                alt="Preview"
+              />
+            </div>
+          )}
+
+          {/* Live Text Overlay Layer */}
+          {/* This renders the CSS-based captions for previewing.
+              We only hide this if we are currently showing a "burned" preview image (which already has text),
+              to avoid double-rendering text.
+          */}
+          <div className="absolute inset-0 z-20 pointer-events-none overflow-hidden">
+            {(() => {
+              const isShowingBurnedPreview = previewFrame && isBurnedPreview && (!hasPreviewed || (!isPlaying && currentTime < 0.1));
+              if (isShowingBurnedPreview) return null;
+              return renderPreviewOverlay();
+            })()}
+          </div>
 
           {/* Controls Overlay (Optional / Basic) */}
-          <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-4 opacity-0 hover:opacity-100 transition-opacity p-2 bg-gradient-to-t from-black/50 to-transparent">
+          <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-4 opacity-0 hover:opacity-100 transition-opacity p-2 bg-gradient-to-t from-black/50 to-transparent z-20">
             <Button variant="ghost" size="icon" onClick={togglePlay} className="text-white hover:bg-white/20">
               {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
             </Button>

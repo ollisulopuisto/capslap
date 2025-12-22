@@ -3,6 +3,7 @@ import readline from 'node:readline'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
+import * as fs from 'node:fs'
 
 type Progress = { event: 'Progress'; id: string; status: string; progress: number }
 
@@ -41,7 +42,7 @@ export class Sidecar {
     // Find the first existing path
     for (const possiblePath of possiblePaths) {
       try {
-        if (require('fs').existsSync(possiblePath)) {
+        if (fs.existsSync(possiblePath)) {
           binPath = possiblePath
           break
         }
@@ -93,7 +94,9 @@ export class Sidecar {
 
     this.rl.on('line', (line) => {
       try {
-        console.log('[SIDECAR] Raw response:', line)
+        // Truncate raw log if too long (e.g. base64 image)
+        const displayLine = line.length > 500 ? line.substring(0, 500) + '...[TRUNCATED]' : line
+        console.log('[SIDECAR] Raw response:', displayLine)
         const msg = JSON.parse(line)
 
         if (msg.event === 'progress' && this.progressCb) {
@@ -102,7 +105,16 @@ export class Sidecar {
           return
         }
         if (msg.result !== undefined && msg.id) {
-          console.log('[SIDECAR] Success response for:', msg.id, msg.result)
+          // Create a safe copy for logging that doesn't contain huge strings
+          const safeResult = { ...msg.result }
+          if (safeResult.imageData && safeResult.imageData.length > 100) {
+            safeResult.imageData = '[BASE64 IMAGE DATA TRUNCATED]'
+          }
+          if (safeResult.image_data && safeResult.image_data.length > 100) {
+            safeResult.image_data = '[BASE64 IMAGE DATA TRUNCATED]'
+          }
+
+          console.log('[SIDECAR] Success response for:', msg.id, safeResult)
           this.pending.get(msg.id)?.resolve(msg.result)
           this.pending.delete(msg.id)
         } else if (msg.error && msg.id) {
@@ -112,7 +124,7 @@ export class Sidecar {
           this.pending.delete(msg.id)
         }
       } catch (err) {
-        console.error('[SIDECAR] Failed to parse response:', line, err)
+        console.error('[SIDECAR] Failed to parse response:', line.substring(0, 200), err)
       }
     })
 

@@ -81,6 +81,7 @@ pub async fn burn_captions_with_segments(
         params.outline_color,
         params.glow_effect,
         params.karaoke,
+        params.multiline,
         params.position,
         params.output_size,
         params.crop_strategy,
@@ -127,6 +128,7 @@ pub async fn generate_captions_single_pass(
         params.outline_color,
         params.glow_effect,
         params.karaoke,
+        params.multiline,
         params.position,
         params.output_size,
         params.crop_strategy,
@@ -351,6 +353,149 @@ pub fn load_captions(params: LoadCaptionsParams) -> Result<LoadCaptionsResult> {
     }
 }
 
+pub async fn generate_preview_frame(
+    params: crate::types::PreviewFrameParams
+) -> Result<crate::types::PreviewFrameResult> {
+    let temp_dir = std::env::temp_dir().join(format!("capslap_preview_{}", uuid::Uuid::new_v4()));
+    if let Err(e) = fs::create_dir_all(&temp_dir) {
+        return Err(anyhow!("Failed to create temp directory: {}", e));
+    }
+    
+    // We need to probe to get video dimensions
+    // We don't have an ID for logs here, so we use a placeholder
+    let probe_id = "preview_probe";
+    let probe_result = probe(probe_id, &params.input_video, |e| {
+        // Ignore logs for preview
+        let _ = e; 
+    }).await?;
+
+    // Determine target dimensions
+    let target_ar = crate::video::parse_target_ar(&params.export_format)?;
+    let src_w = probe_result.width.unwrap_or(1920) as u32;
+    let src_h = probe_result.height.unwrap_or(1080) as u32;
+    
+    let (target_w, target_h) = if let Some(size) = &params.output_size {
+        match size.as_str() {
+             "1080p" => {
+                 let (base_w, base_h) = crate::video::ar_wh(target_ar);
+                 let ar = base_w as f64 / base_h as f64;
+                 if base_w > base_h {
+                     let w = (1080.0 * ar).round() as u32;
+                     (crate::video::round_even(w), 1080)
+                 } else {
+                     let h = (1080.0 / ar).round() as u32;
+                     (1080, crate::video::round_even(h))
+                 }
+             },
+             _ => crate::video::canvas_no_downscale(src_w, src_h, target_ar)
+        }
+    } else {
+        crate::video::canvas_no_downscale(src_w, src_h, target_ar)
+    };
+
+    // Calculate crop strategy
+    let crop_strategy = params.crop_strategy.as_deref().unwrap_or("fit");
+
+    // Build ASS file for valid segments
+    // Filter segments that overlap with timestamp ?? 
+    // Actually, for a single frame preview, we usually want to see a specific segment.
+    // But the caller might pass all segments.
+    // It's safer to pass all segments and let ASS renderer handle the timing, 
+    // since we use timestamp to seek.
+    
+    let style = default_ass_style(
+        target_w, target_h,
+        params.font_name.as_deref(),
+        params.text_color.as_deref(),
+        params.highlight_word_color.as_deref(),
+        params.outline_color.as_deref(),
+        params.glow_effect,
+        params.position.as_deref()
+    );
+    
+    let ass_doc = build_ass_document(
+        target_w, target_h, 
+        &style, 
+        &params.segments, 
+        params.karaoke, 
+        params.multiline, 
+        params.glow_effect
+    )?;
+
+    let ass_path = temp_dir.join("preview.ass");
+    fs::write(&ass_path, &ass_doc)?;
+    
+    // Construct filter graph
+    let ass_str = ass_path.to_string_lossy().to_string();
+    let is_hdr = crate::video::is_hdr(&probe_result);
+    // Use software encoder logic for filter because we are extracting a PNG, 
+    // and we don't need hardware encode for a single frame usually, or it complicates things.
+    // `build_fitpad_filter_with_options` is what we want.
+    let vf = crate::video::build_fitpad_filter_with_options(
+        target_w, 
+        target_h, 
+        Some(&ass_str), 
+        crate::video::HardwareEncoder::Software, // Use software mode for compatibility
+        crop_strategy,
+        is_hdr
+    );
+    
+    // Extract frame using FFmpeg
+    let ffmpeg_path = crate::video::get_ffmpeg_path_sync();
+    let time_sec = params.timestamp_ms as f64 / 1000.0;
+    
+    // -ss placed before -i is faster aka keyframe seek (but less accurate)
+    // -ss placed after -i is slower (frame exact decoding) but more accurate.
+    // For preview we want accuracy so we seek after? 
+    // Actually, if we use -ss before -i, ffmpeg seeks to keyframe and then decodes to timestamp.
+    // BUT since we are applying complex filters, we might need accurate decoding.
+    // Let's use -ss before -i for speed, but add -copyts or re-adjustment?
+    // Safer to put -ss after -i for exact frame if speed is acceptable (single frame).
+    
+    // However, for complex filters, seeking might shift things.
+    // Let's try standard seeking.
+    
+    // Note: We need to ensure we output image format.
+    
+    // Wait, if we use fitpad filter, it modifies timestamps/frames? No.
+    
+    let output = TokioCommand::new(&ffmpeg_path)
+        .arg("-ss")
+        .arg(time_sec.to_string())
+        .arg("-i")
+        .arg(&params.input_video)
+        .arg("-vf")
+        .arg(&vf)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-f")
+        .arg("image2")
+        .arg("-c:v")
+        .arg("png")
+        .arg("-") // Output to stdout
+        .output()
+        .await
+        .map_err(|e| anyhow!("Failed to run ffmpeg: {}", e))?;
+
+    if !output.status.success() {
+         let stderr = String::from_utf8_lossy(&output.stderr);
+         return Err(anyhow!("FFmpeg preview failed: {}", stderr));
+    }
+
+    use base64::{Engine as _, engine::general_purpose};
+    let encoded = general_purpose::STANDARD.encode(&output.stdout);
+    let data_uri = format!("data:image/png;base64,{}", encoded);
+    
+    // Cleanup
+    let _ = fs::remove_dir_all(temp_dir);
+
+    Ok(crate::types::PreviewFrameResult {
+        image_data: data_uri
+    })
+}
+
+#[cfg(test)]
+
 #[cfg(test)]
 #[cfg(test)]
 mod tests_persistence {
@@ -421,6 +566,7 @@ async fn optimized_multi_format_encode(
     outline_color: Option<String>,
     glow_effect: bool,
     karaoke: bool,
+    multiline: bool,
     position: Option<String>,
     output_size: Option<String>,
     crop_strategy: Option<String>,
@@ -516,7 +662,7 @@ async fn optimized_multi_format_encode(
             id: id.into(),
             message: format!("Building ASS document for format: {}", format)
         });
-        let ass_doc = build_ass_document(target_w, target_h, &style, segments, karaoke, glow_effect)?;
+        let ass_doc = build_ass_document(target_w, target_h, &style, segments, karaoke, multiline, glow_effect)?;
         emit(RpcEvent::Log {
             id: id.into(),
             message: format!("ASS document built for format: {}", format)
@@ -1148,8 +1294,22 @@ fn assemble_colored_two_lines(
         let should_highlight = has_highlighting && i == hi;
         s.push_str(if should_highlight { &hi_style } else { &white });
         let t = tokens[i].replace('\\', r"\\").replace('{', r"\{").replace('}', r"\}");
-        s.push_str(&t);
-        if i + 1 < tokens.len() { s.push(' '); }
+        s.push_str(&t); // Moved s.push_str(&t) earlier to use t for check? No wait.
+        
+        // original was:
+        // let t = ...
+        // s.push_str(&t);
+        // if i + 1 < tokens.len() { s.push(' '); }
+        
+        // New logic:
+        // Check if CURRENT token (not t, but tokens[i]) ends with '-'
+        // Note: tokens[i] might be raw string.
+        if i + 1 < tokens.len() {
+             let ends_with_hyphen = tokens[i].ends_with('-') && tokens[i].len() > 1;
+             if !ends_with_hyphen {
+                 s.push(' ');
+             }
+        }
     }
     s
 }
@@ -1392,12 +1552,13 @@ fn build_ass_document(
     style: &AssStyle,
     segments: &[CaptionSegment],
     karaoke: bool,
+    multiline: bool,
     glow_effect: bool
 ) -> Result<String> {
     if segments.is_empty() {
         return Err(anyhow!("No caption segments"));
     }
-    eprintln!("DEBUG: build_ass_document start. karaoke={}, glow={}", karaoke, glow_effect);
+    eprintln!("DEBUG: build_ass_document start. karaoke={}, multiline={}, glow={}", karaoke, multiline, glow_effect);
 
     let header = format!(
 r#"[Script Info]
@@ -1430,7 +1591,11 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
         // Simple single-line karaoke: split phrases that are too wide, then process each segment
         for ph in phrases {
             let tokens_upper = normalize_tokens(&ph.spans);
-            let segments = split_phrase_for_width(&tokens_upper, &ph.spans, w, style.font_size);
+            let segments = if multiline {
+                split_phrase_two_lines(&tokens_upper, &ph.spans, w, style.font_size)
+            } else {
+                split_phrase_for_width(&tokens_upper, &ph.spans, w, style.font_size).into_iter().map(|(t, s)| (t, s, usize::MAX)).collect()
+            };
 
             // Calculate Y position based on alignment
             let y_pos = match style.align {
@@ -1439,7 +1604,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             };
 
             // Process each width-appropriate segment
-            for (segment_tokens, segment_spans) in segments {
+            for (segment_tokens, segment_spans, split_idx) in segments {
                 let windows = contiguous_cs_windows(&segment_spans);
 
                 for (i, (cs0, cs1)) in windows.iter().enumerate() {
@@ -1463,7 +1628,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                         6.0,
                         stretch_tag_ms(dur_ms)
                     );
-                    let glow_text = assemble_colored_two_lines(&segment_tokens, i, &white_bgr, &hi_bgr, usize::MAX, &glow_header, style.font_size);
+                    let glow_text = assemble_colored_two_lines(&segment_tokens, i, &white_bgr, &hi_bgr, split_idx, &glow_header, style.font_size);
                     lines.push_str(&format!(
                         "Dialogue: 0,{},{},TikTok,,0,0,0,,{}\n",
                         cs_to_ass(*cs0), cs_to_ass(*cs1), glow_text
@@ -1476,14 +1641,14 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                         style.outline_w,
                         stretch_tag_ms(dur_ms)
                     );
-                    let main_text = assemble_colored_two_lines(&segment_tokens, i, &white_bgr, &hi_bgr, usize::MAX, &main_header, style.font_size);
+                    let main_text = assemble_colored_two_lines(&segment_tokens, i, &white_bgr, &hi_bgr, split_idx, &main_header, style.font_size);
                     lines.push_str(&format!(
                         "Dialogue: 1,{},{},TikTok,,0,0,0,,{}\n",
                         cs_to_ass(*cs0), cs_to_ass(*cs1), main_text
                     ));
                 } else {
                     // Single layer
-                    let text = assemble_colored_two_lines(&segment_tokens, i, &white_bgr, &hi_bgr, usize::MAX, &header, style.font_size);
+                    let text = assemble_colored_two_lines(&segment_tokens, i, &white_bgr, &hi_bgr, split_idx, &header, style.font_size);
                     lines.push_str(&format!(
                         "Dialogue: 0,{},{},TikTok,,0,0,0,,{}\n",
                         cs_to_ass(*cs0), cs_to_ass(*cs1), text
@@ -1767,12 +1932,23 @@ fn assemble_multiline(
         let t_len = t_clean.len();
         
         // Simple wrapping check
+        // Simple wrapping check
+        // Check if previous token ended with hyphen to suppress space
+        let prev_ended_with_hyphen = if i > 0 {
+             let prev = &tokens[i-1];
+             prev.ends_with('-') && prev.len() > 1
+        } else {
+             false
+        };
+
         if line_len > 0 && line_len + t_len + 1 > max_chars_per_line {
             s.push_str(r"\N");
             line_len = 0;
         } else if line_len > 0 {
-            s.push(' ');
-            line_len += 1;
+             if !prev_ended_with_hyphen {
+                 s.push(' ');
+                 line_len += 1;
+             }
         }
         
         // Color logic
@@ -1797,6 +1973,72 @@ fn hex_to_ass_color(hex: &str) -> String {
     } else {
         "&H00FFFFFF".into() // Default to white if invalid hex
     }
+}
+
+// Split phrase into up to 2 lines for "Karaoke (Two Lines)" mode
+fn split_phrase_two_lines(
+    tokens: &[String],
+    spans: &[WordSpan],
+    frame_w: u32,
+    font_px: u32
+) -> Vec<(Vec<String>, Vec<WordSpan>, usize)> {
+    // Determine max chars per line
+    let est_char_width = (font_px as f32 * 0.7).max(1.0);
+    // Use slightly less width to be safe for 2 lines
+    let max_chars = ((frame_w as f32 * 0.9) / est_char_width).floor() as usize; 
+
+    // Target total length for a "screenful" (2 lines)
+    // We want to fill 2 lines if possible, so max capacity = 2 * max_chars
+    let max_capacity_chars = max_chars * 2;
+
+    let mut segments = Vec::new();
+    let mut current_tokens = Vec::new();
+    let mut current_spans = Vec::new();
+    let mut current_len = 0;
+
+    for (token, span) in tokens.iter().zip(spans.iter()) {
+        let token_len = token.len() + 1; // + space
+
+        if current_len > 0 && current_len + token_len > max_capacity_chars {
+             // Current 2-line block is full, push it
+             if !current_tokens.is_empty() {
+                 let split_idx = find_best_split(&current_tokens, max_chars);
+                 segments.push((current_tokens.clone(), current_spans.clone(), split_idx));
+                 current_tokens.clear();
+                 current_spans.clear();
+                 current_len = 0;
+             }
+        }
+        
+        current_tokens.push(token.clone());
+        current_spans.push(span.clone());
+        current_len += token_len;
+    }
+
+    if !current_tokens.is_empty() {
+        let split_idx = find_best_split(&current_tokens, max_chars);
+        segments.push((current_tokens, current_spans, split_idx));
+    }
+
+    segments
+}
+
+// Find best index to split tokens into 2 lines
+fn find_best_split(tokens: &[String], max_chars_per_line: usize) -> usize {
+    let mut current_len = 0;
+    for (i, token) in tokens.iter().enumerate() {
+        let len = token.len() + 1;
+        if current_len + len > max_chars_per_line {
+            // This token makes it overflow, so split BEFORE this token
+            // i.e., line 1 ends at index i (0..i includes i items?) 
+            // assemble_colored_two_lines takes line1_count. 
+            // If we return i, line 1 has i items (0 to i-1). Item i starts line 2.
+            return i;
+        }
+        current_len += len;
+    }
+    // If it all fits in one line, return usize::MAX so it doesn't break
+    usize::MAX
 }
 
 #[cfg(test)]
@@ -1845,5 +2087,42 @@ mod tests {
         let d1 = e1 - s1;
         assert!(d0 > d1); // 4 chars > 3 chars
         assert!((d0 as i64 - 571).abs() < 5);
+    }
+
+    #[test]
+    fn test_assemble_colored_two_lines_hyphenation() {
+        let tokens = vec!["SAKSALAIS-".to_string(), "ROOMALAINEN".to_string()];
+        
+        // We need to provide dummy args for assemble_colored_two_lines
+        // It requires: tokens, hi, white_bgr, hi_bgr, line1_count, header, font_size
+        let result = assemble_colored_two_lines(
+            &tokens,
+            usize::MAX, // no highlight
+            "FFFFFF",
+            "0000FF",
+            usize::MAX, // no break
+            "{\\an2}",
+            20
+        );
+        
+        println!("Result: {}", result);
+        assert!(!result.contains("SAKSALAIS- "), "Should not contain space after hyphen");
+    }
+
+    #[test]
+    fn test_assemble_multiline_hyphenation() {
+        let tokens = vec!["FOO-".to_string(), "BAR".to_string()];
+        
+        let result = assemble_multiline(
+            &tokens, 
+            usize::MAX,
+            "FFFFFF",
+            "0000FF",
+            20,
+            100
+        );
+        
+        println!("Result: {}", result);
+        assert!(!result.contains("FOO- "), "Should not contain space after hyphen in multiline");
     }
 }

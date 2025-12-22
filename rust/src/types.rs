@@ -110,6 +110,8 @@ pub struct GenerateCaptionsParams {
     pub input_video: String,              // Path to input video file
     pub export_formats: Vec<String>,      // List of aspect ratios to export (e.g., ["9:16", "16:9"])
     pub karaoke: bool,                    // Whether to use karaoke-style highlighting
+    #[serde(default)]
+    pub multiline: bool,                  // Whether to allow multiple lines (karaoke)
     pub font_name: Option<String>,        // Font name for captions (defaults to "Montserrat Black")
     pub split_by_words: bool,             // Whether to split transcription by words or segments
     pub model: Option<String>,            // Whisper model to use (default: "whisper-1")
@@ -148,6 +150,8 @@ pub struct BurnCaptionsParams {
     pub segments: Vec<CaptionSegment>,    // The edited segments to burn
     pub export_formats: Vec<String>,      // List of aspect ratios to export
     pub karaoke: bool,                    // Whether to use karaoke-style highlighting
+    #[serde(default)]
+    pub multiline: bool,                  // Whether to allow multiple lines (karaoke)
     pub font_name: Option<String>,        // Font name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_color: Option<String>,       // Text color
@@ -215,6 +219,8 @@ pub struct PreviewLayoutParams {
     pub outline_color: Option<String>,
     pub position: Option<String>,
     pub karaoke: bool,
+    #[serde(default)]
+    pub multiline: bool,
     pub glow_effect: bool,
 }
 
@@ -265,3 +271,37 @@ pub struct LoadCaptionsResult {
     pub segments: Option<Vec<CaptionSegment>>,
 }
 
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewFrameParams {
+    pub input_video: String,              // Path to input video file
+    pub segments: Vec<CaptionSegment>,    // The edited segments (we usually only need the one at timestamp)
+    pub timestamp_ms: u64,                // Time in ms to extract frame from
+    pub export_format: String,            // Aspect ratio format (e.g., "9:16")
+    pub fit_mode: Option<String>,         // "cover" or "contain" (default "cover" aka "fit")
+    pub karaoke: bool,                    // Whether to use karaoke-style highlighting
+    #[serde(default)]
+    pub multiline: bool,                  // Whether to allow multiple lines (karaoke)
+    pub font_name: Option<String>,        // Font name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_color: Option<String>,       // Text color
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub highlight_word_color: Option<String>, // Highlight word color
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outline_color: Option<String>,    // Outline color
+    #[serde(default)]
+    pub glow_effect: bool,                // Whether to apply glow effect
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,         // Caption position
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_size: Option<String>,     // Target output size
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crop_strategy: Option<String>,   // Crop strategy
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewFrameResult {
+    pub image_data: String,       // Base64 encoded image data
+}
