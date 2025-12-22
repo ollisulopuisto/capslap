@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef } from 'react'
 import { Button } from '@/app/components/ui/button'
-import { ArrowLeft, ArrowRight, Play, Pause, Pencil, Check, X, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Pencil, Check, X, Zap } from 'lucide-react'
 import { Textarea } from '@/app/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
@@ -82,98 +82,15 @@ export function CaptionEditor({
   initialSegments,
   onBurn,
   onCancel,
-  videoPath,
+  videoPath, // Kept to satisfy props, but unused? Actually used in videoUrl but videoUrl is unused.
   settings,
   previewFrame,
-  isBurnedPreview,
 }: CaptionEditorProps) {
   const [segments, setSegments] = useState<CaptionSegment[]>(initialSegments)
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [hasPreviewed, setHasPreviewed] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0)
+  // Removed unused video playback state
   const [editingSegmentIndex, setEditingSegmentIndex] = useState<number | null>(null)
   const [editText, setEditText] = useState('')
-  const videoRef = useRef<HTMLVideoElement>(null)
   const activeSegmentRef = useRef<HTMLDivElement>(null)
-
-  // New state for layout
-  const [previewCues, setPreviewCues] = useState<PreviewCue[]>([])
-  const [videoDims, setVideoDims] = useState<{ width: number; height: number } | null>(null)
-  const [hasPlaybackError, setHasPlaybackError] = useState(false)
-
-  // Convert video path to renderable URL
-  const videoUrl = videoPath.startsWith('/') ? `res://local${videoPath}` : videoPath
-
-  // Fetch layout from backend
-  useEffect(() => {
-    if (!videoDims) return
-
-    const fetchLayout = async () => {
-      try {
-        const result = (await (window as any).rust.call('previewLayout', {
-          segments,
-          width: videoDims.width,
-          height: videoDims.height,
-          fontName: getFontName(settings.selectedFont),
-          textColor: settings.textColor,
-          highlightWordColor: settings.highlightWordColor,
-          outlineColor: settings.outlineColor,
-          position: settings.captionPosition,
-          karaoke: settings.captionStyle === 'karaoke' || settings.captionStyle === 'karaoke-multiline',
-          multiline: settings.captionStyle === 'karaoke-multiline',
-          glowEffect: settings.glowEffect,
-        })) as { cues: PreviewCue[] }
-
-        if (result && result.cues) {
-          setPreviewCues(result.cues)
-        }
-      } catch (e) {
-        console.error('Failed to fetch preview layout', e)
-      }
-    }
-
-    const timer = setTimeout(fetchLayout, 100)
-    return () => clearTimeout(timer)
-  }, [segments, settings, videoDims])
-
-  useEffect(() => {
-    if (activeSegmentRef.current) {
-      activeSegmentRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
-  }, [currentTime])
-
-  const togglePlay = () => {
-    if (videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.pause()
-      } else {
-        videoRef.current.play()
-      }
-      setIsPlaying(!isPlaying)
-    }
-  }
-
-  const handleTimeUpdate = () => {
-    if (videoRef.current) {
-      setCurrentTime(videoRef.current.currentTime)
-    }
-  }
-
-  const handleLoadedMetadata = () => {
-    if (videoRef.current) {
-      setVideoDims({
-        width: videoRef.current.videoWidth,
-        height: videoRef.current.videoHeight,
-      })
-    }
-  }
-
-  const seekTo = (ms: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = ms / 1000
-      setCurrentTime(ms / 1000)
-    }
-  }
 
   // Move the last word of segment[index] to the beginning of segment[index+1]
   const moveLastWordToNext = (index: number) => {
@@ -216,7 +133,6 @@ export function CaptionEditor({
     newSegments[index + 1] = newNext
 
     setSegments(newSegments)
-    setHasPreviewed(false)
   }
 
   // Move the first word of segment[index] to the end of segment[index-1]
@@ -258,7 +174,6 @@ export function CaptionEditor({
     newSegments[index] = newCurrent
 
     setSegments(newSegments)
-    setHasPreviewed(false)
   }
 
   const handleSaveEdit = (index: number) => {
@@ -291,100 +206,16 @@ export function CaptionEditor({
     newSegments[index] = newSegment
     setSegments(newSegments)
     setEditingSegmentIndex(null)
-    setHasPreviewed(false)
-  }
-
-  const renderPreviewOverlay = () => {
-
-
-    const timeMs = currentTime * 1000
-    // Find active cue from backend layout
-    const activeCue = previewCues.find((c) => timeMs >= c.startMs && timeMs < c.endMs)
-
-    if (!activeCue) return null
-
-    const fontName = getFontName(settings.selectedFont)
-    const baseStyle = {
-      fontFamily: fontName,
-      color: settings.textColor,
-      WebkitTextStroke: settings.outlineColor ? `2px ${settings.outlineColor}` : 'none',
-      textShadow: settings.glowEffect ? `0 0 10px ${settings.highlightWordColor}` : 'none',
-    }
-
-    const positionClass = cn(
-      'absolute left-0 right-0 text-center px-8 transition-all duration-200',
-      settings.captionPosition === 'top' && 'top-12',
-      settings.captionPosition === 'top-quarter' && 'top-1/4',
-      settings.captionPosition === 'center' && 'top-1/2 -translate-y-1/2',
-      settings.captionPosition === 'bottom-quarter' && 'bottom-1/4',
-      settings.captionPosition === 'bottom' && 'bottom-12'
-    )
-
-    return (
-      <div className={positionClass}>
-        <div className="flex flex-col items-center gap-[0.1em]">
-          {activeCue.lines.map((line, lineIdx) => (
-            <div key={lineIdx} className="flex flex-wrap justify-center gap-[0.2em] max-w-full">
-              {line.words.map((word, wIdx) => {
-                const isHighlighted = word.isHighlighted
-                const wordStyle = {
-                  ...baseStyle,
-                  color: isHighlighted ? settings.highlightWordColor : settings.textColor,
-                }
-                return (
-                  <span key={wIdx} style={wordStyle} className="text-2xl font-bold leading-tight whitespace-nowrap">
-                    {word.text}
-                  </span>
-                )
-              })}
-            </div>
-          ))}
-        </div>
-      </div>
-    )
   }
 
   return (
     <div className="flex bg-[#08090a] text-white h-full w-full overflow-hidden">
       {/* Left: Video Player */}
+      {/* Left: Preview Image */}
       <div className="flex-1 relative bg-black flex flex-col justify-center items-center border-r border-white/10">
         <div className="relative w-full h-full max-h-full aspect-[9/16] max-w-md mx-auto bg-black">
-          {/* Video Player Render */}
-          <video
-            ref={videoRef}
-            src={videoUrl}
-            className="w-full h-full object-contain"
-            onTimeUpdate={handleTimeUpdate}
-            onLoadedMetadata={handleLoadedMetadata}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-            onError={() => setHasPlaybackError(true)}
-            playsInline
-          />
-
-          {/* Playback Error Overlay */}
-          {hasPlaybackError && (
-            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/80 text-center p-6">
-              <div className="bg-yellow-500/10 text-yellow-500 p-4 rounded-full mb-4">
-                <Zap className="w-8 h-8" />
-              </div>
-              <h3 className="text-lg font-bold text-white mb-2">Preview Unavailable</h3>
-              <p className="text-sm text-gray-400 max-w-[250px]">
-                This video format cannot be played in the preview player.
-              </p>
-              <p className="text-xs text-gray-500 mt-4 max-w-[250px]">
-                Don't worry! You can still edit captions and the final video will generate correctly.
-              </p>
-            </div>
-          )}
-
           {/* Static Preview Image Layer */}
-          {/* We show this when:
-              1. We have a preview frame
-              2. AND (we haven't started "previewing" yet OR we are paused at the very start)
-              This ensures the user sees the generated high-quality thumbnail initially.
-          */}
-          {previewFrame && (!hasPreviewed || (!isPlaying && currentTime < 0.1)) && (
+          {previewFrame ? (
             <div className="absolute inset-0 z-10 bg-black">
               <img
                 src={previewFrame}
@@ -392,27 +223,11 @@ export function CaptionEditor({
                 alt="Preview"
               />
             </div>
+          ) : (
+            <div className="flex items-center justify-center h-full text-muted-foreground">
+              <p>No preview available</p>
+            </div>
           )}
-
-          {/* Live Text Overlay Layer */}
-          {/* This renders the CSS-based captions for previewing.
-              We only hide this if we are currently showing a "burned" preview image (which already has text),
-              to avoid double-rendering text.
-          */}
-          <div className="absolute inset-0 z-20 pointer-events-none overflow-hidden">
-            {(() => {
-              const isShowingBurnedPreview = previewFrame && isBurnedPreview && (!hasPreviewed || (!isPlaying && currentTime < 0.1));
-              if (isShowingBurnedPreview) return null;
-              return renderPreviewOverlay();
-            })()}
-          </div>
-
-          {/* Controls Overlay (Optional / Basic) */}
-          <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-4 opacity-0 hover:opacity-100 transition-opacity p-2 bg-gradient-to-t from-black/50 to-transparent z-20">
-            <Button variant="ghost" size="icon" onClick={togglePlay} className="text-white hover:bg-white/20">
-              {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6" />}
-            </Button>
-          </div>
         </div>
       </div>
 
@@ -424,33 +239,15 @@ export function CaptionEditor({
             <Button variant="ghost" onClick={onCancel} size="sm">
               Cancel
             </Button>
-            {hasPreviewed ? (
-              <Button onClick={() => onBurn(segments)} size="sm" className="bg-primary hover:bg-primary/90">
-                <Zap className="w-4 h-4 mr-2" />
-                Generate Video
-              </Button>
-            ) : (
-              <Button
-                onClick={() => {
-                  if (videoRef.current) {
-                    videoRef.current.play()
-                    setIsPlaying(true)
-                  }
-                  setHasPreviewed(true)
-                }}
-                size="sm"
-                className="bg-primary hover:bg-primary/90"
-              >
-                <Play className="w-4 h-4 mr-2" />
-                Preview Video
-              </Button>
-            )}
+            <Button onClick={() => onBurn(segments)} size="sm" className="bg-primary hover:bg-primary/90">
+              <Zap className="w-4 h-4 mr-2" />
+              Generate Video
+            </Button>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-4 p-4">
           {segments.map((seg, idx) => {
-            const isActive = currentTime * 1000 >= seg.startMs && currentTime * 1000 < seg.endMs
             const isEditing = editingSegmentIndex === idx
 
             if (isEditing) {
@@ -482,12 +279,9 @@ export function CaptionEditor({
             return (
               <div
                 key={idx}
-                ref={isActive ? activeSegmentRef : null}
                 className={cn(
-                  'group bg-card/30 border border-border/30 rounded-lg p-4 flex flex-col gap-3 transition-all cursor-pointer relative',
-                  isActive ? 'border-primary bg-primary/10 ring-1 ring-primary/20' : 'hover:border-primary/30'
+                  'group bg-card/30 border border-border/30 rounded-lg p-4 flex flex-col gap-3 transition-all cursor-pointer relative hover:border-primary/30'
                 )}
-                onClick={() => seekTo(seg.startMs)}
                 onDoubleClick={(e) => {
                   e.stopPropagation()
                   setEditingSegmentIndex(idx)
@@ -502,10 +296,7 @@ export function CaptionEditor({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className={cn(
-                      'h-6 w-6 transition-opacity',
-                      isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                    )}
+                    className="h-6 w-6 transition-opacity opacity-0 group-hover:opacity-100"
                     onClick={(e) => {
                       e.stopPropagation()
                       setEditingSegmentIndex(idx)
@@ -520,16 +311,10 @@ export function CaptionEditor({
                 {/* Words */}
                 <div className="flex flex-wrap gap-1.5">
                   {seg.words.map((word, wIdx) => {
-                    const isWordActive = currentTime * 1000 >= word.startMs && currentTime * 1000 < word.endMs
                     return (
                       <span
                         key={wIdx}
-                        className={cn(
-                          'px-2 py-1 rounded text-sm border transition-colors cursor-default',
-                          isWordActive
-                            ? 'bg-primary/30 border-primary/50 text-white'
-                            : 'bg-white/5 border-white/10 hover:bg-white/10 text-white/80'
-                        )}
+                        className="px-2 py-1 rounded text-sm border transition-colors cursor-default bg-white/5 border-white/10 hover:bg-white/10 text-white/80"
                         title={`${formatTime(word.startMs)} - ${formatTime(word.endMs)}`}
                       >
                         {word.text}
@@ -539,12 +324,7 @@ export function CaptionEditor({
                 </div>
 
                 {/* Actions */}
-                <div
-                  className={cn(
-                    'flex items-center gap-2 mt-1 transition-opacity',
-                    isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                  )}
-                >
+                <div className="flex items-center gap-2 mt-1 transition-opacity opacity-0 group-hover:opacity-100">
                   {/* Move start word to previous */}
                   <Button
                     variant="secondary"
