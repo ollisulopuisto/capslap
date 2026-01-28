@@ -2,11 +2,12 @@
 
 Automatically generate and burn captions into videos using AI transcription. **Works 100% offline** with local Whisper models.
 
-<img width="1200" height="800" alt="CleanShot 2025-10-25 at 13 28 49@2x" src="https://github.com/user-attachments/assets/58b2db2a-e2dd-433a-bf2e-5d8c19efad93" />
+![CapSlap Screenshot](screenshot.png)
 
 ## ✨ Features
 
 - **🔒 100% Local/Offline** - All transcription runs locally using whisper.cpp. No cloud API required, your video never leaves your machine
+- **👁️ Live Preview** - See exactly how your captions will look before exporting with real-time preview
 - **🎨 30+ Custom Fonts** - Choose from a curated library organized by style:
   - **Modern / Sans** - Montserrat, Roboto, Open Sans, Lato, Raleway, Kanit, Poppins, WorkSans
   - **Display / Impact** - THEBOLDFONT, Bebas Neue, Anton, Lilita One, Oswald, Bangers
@@ -18,6 +19,7 @@ Automatically generate and burn captions into videos using AI transcription. **W
 - **🎯 Word-Level Timing** - Karaoke-style highlighting with precise word synchronization
 - **📱 Export Formats** - 9:16 (TikTok/Reels), 16:9 (YouTube), 1:1 (Instagram), 4:5 (Feed posts)
 - **✏️ Caption Editor** - Edit transcribed text and adjust timing before burning
+- **🌍 Multilingual** - Transcribe in 99+ languages including English, Spanish, French, German, Finnish, Japanese, and more
 
 ## Prerequisites
 
