@@ -21,7 +21,25 @@ pub fn get_ffmpeg_path_sync() -> String {
         }
     }
 
-    // Try bundled path next to the executable (production)
+    // PRIORITY 1: Bundled binary in rust/bin (Development / bundled script)
+    // This matches the logic we added to whisper.rs
+    let project_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let bin_dir = project_root.join("bin");
+    let bundled_rust = bin_dir.join(if cfg!(target_os = "windows") {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    });
+
+    if bundled_rust.exists() {
+        eprintln!(
+            "DEBUG: Found bundled ffmpeg at rust/bin: {:?}",
+            bundled_rust
+        );
+        return bundled_rust.to_string_lossy().to_string();
+    }
+
+    // PRIORITY 2: Bundled path next to the executable (Production app bundle)
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             let bundled = exe_dir.join(if cfg!(target_os = "windows") {
@@ -413,15 +431,6 @@ pub async fn is_nvenc_available() -> bool {
     }
 }
 
-/// Check if whisper.cpp CLI is available (preferred method)
-pub async fn is_whisper_cpp_available() -> bool {
-    // Use the new cross-platform whisper binary detection from whisper.rs
-    match crate::whisper::find_whisper_binary().await {
-        Ok(_) => true,
-        Err(_) => false,
-    }
-}
-
 /// Check if FFmpeg has built-in Whisper support (requires FFmpeg 8.0+)
 /// This function tests if ffmpeg supports the whisper audio filter
 pub async fn is_ffmpeg_whisper_available() -> bool {
@@ -436,6 +445,15 @@ pub async fn is_ffmpeg_whisper_available() -> bool {
             // Look for whisper filter in the audio filters list
             stdout.contains("whisper")
         }
+        Err(_) => false,
+    }
+}
+
+/// Check if whisper.cpp CLI is available (preferred method)
+pub async fn is_whisper_cpp_available() -> bool {
+    // Use the new cross-platform whisper binary detection from whisper.rs
+    match crate::whisper::find_whisper_binary().await {
+        Ok(_) => true,
         Err(_) => false,
     }
 }
@@ -746,80 +764,8 @@ pub async fn export_video(
     let use_standard_sizes = p.use_standard_sizes.unwrap_or(false);
 
     // Verify libass availability if subtitles are requested
-    // We do this early to fail fast with a clear error
-    if let Some(format) = &p.format {
-        // Current implementation assumes text burning is needed for formatted exports
-        // Logic check: do we have a way to know if subtitles are actually being used?
-        // The current build_fitpad_filter takes subtitle_path.
-        // But export_video doesn't seemingly have access to a subtitle path arg in ExportParams?
-        // Wait, where is subtitle_path coming from?
-        // Looking at the code, build_fitpad_filter is called inside export_video,
-        // but I don't see where subtitle_path is passed to export_video in the struct!
-        // Ah, p.subtitle_path is NOT in ExportParams struct definition I saw!
-
-        // Let's re-read ExportParams struct definition.
-        // It ends at line 595.
-        // pub struct ExportParams { ... }
-
-        // Wait, if ExportParams doesn't have subtitle_path, how does the code work?
-        // Maybe I missed a field or it's passed differently?
-        // The error log shows `ass='/var/...'`.
-        // The code I viewed for `export_video` calls `vf_fit_pad_no_scale` which DOES NOT take subtitle path.
-        // Line 689: `let pad_filter = vf_fit_pad_no_scale(src_w, src_h, target_ar, "black");`
-
-        // BUT the user log shows `build_fitpad_filter` being called?
-        // AND the user logs show `[SIDECAR] Raw response: {"event":"log", ... "message":"Building ASS document ..."}`
-
-        // It seems the `video.rs` I am viewing might be out of sync with what's running
-        // OR I am misreading where `build_fitpad_filter` handles subtitles.
-        // Ah, `build_fitpad_filter` code:
-        // line 190: `pub fn build_fitpad_filter(..., subtitle_path: Option<&str>, ...)`
-
-        // BUT `export_video` implementation I see (lines 644-966) seems to NOT have subtitle logic
-        // in the `p.format` block (lines 680-717).
-        // It blindly calls `vf_fit_pad_no_scale`.
-
-        // Wait! I might be looking at an older version or the user provided file is weird.
-        // EXCEPT the user provided logs explicitly say "Ass document built...".
-        // This implies the Rust code *is* doing it.
-
-        // Maybe `ExportParams` *does* have it?
-        // Let me check lines 582-595 again.
-        // 582: #[derive(Serialize, Deserialize, Debug)]
-        // 583: #[serde(rename_all = "camelCase")]
-        // 584: pub struct ExportParams {
-        // 585:     pub input: String,
-        // ...
-        // 594:     pub out: String
-        // 595: }
-
-        // I don't see `subtitle_path` or similar.
-        // Is it possible `video.rs` I'm reading is DIFFERENT from what generated the log?
-        // The user says "Other open documents: ... rust/src/video.rs".
-
-        // Wait, looking at lines 669-717 of `export_video` in my view:
-        // it calls `vf_fit_pad_no_scale`.
-        // `vf_fit_pad_no_scale` (line 156) does NOT add subtitles.
-        // `build_fitpad_filter` (line 190) DOES.
-
-        // Where is `build_fitpad_filter` called in `export_video`?
-        // I DON'T SEE IT in `export_video` function body I read!
-        // Lines 644-966.
-
-        // This is extremely suspicious.
-        // Is it possible I am editing the wrong file or the file on disk is different?
-        // Or maybe I missed a `MultiReplace` from a previous turn? No, I am the first one editing.
-
-        // Let me double check Line 190.
-        // `pub fn build_fitpad_filter...`
-
-        // Maybe there is ANOTHER function called `export_video_with_subtitles` or something?
-        // I viewed lines 801-1173.
-        // I viewed lines 1-800.
-        // I have seen the whole file.
-
-        // Let's Search for `build_fitpad_filter` usages in the file.
-    }
+    // Note: The main multi-format export logic (which handles burning subtitles)
+    // is in captions.rs, not here. We added the check there.
 
     // Determine the best available hardware encoder for H.264
     let hardware_encoder = if p.codec == "h264" {
@@ -842,7 +788,7 @@ pub async fn export_video(
     // Build video filter for high-quality export
     let mut vf_parts = Vec::new();
 
-    // Handle video scaling/letterboxing with new high-quality approach
+    // Check for explicit width/height first (legacy/exact mode)
     if let (Some(width), Some(height)) = (p.width, p.height) {
         // exact dimensions specified - use old behavior for backward compatibility
         let filter = format!(

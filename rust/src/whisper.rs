@@ -1,12 +1,15 @@
-use crate::{types::{CaptionSegment, WhisperResponse, WhisperCacheEntry, WhisperCacheIndex, TranscribeSegmentsParams, TranscribeSegmentsResult, WhisperWord, WordSpan}};
+use crate::rpc::RpcEvent;
+use crate::types::{
+    CaptionSegment, TranscribeSegmentsParams, TranscribeSegmentsResult, WhisperCacheEntry,
+    WhisperCacheIndex, WhisperResponse, WhisperWord, WordSpan,
+};
+use crate::video::{is_ffmpeg_whisper_available, is_whisper_cpp_available};
 use blake3;
-use tokio::fs;
-use tokio::process::Command as TokioCommand;
+use regex::Regex;
 use std::path::PathBuf;
 use std::process::Stdio;
-use crate::rpc::RpcEvent;
-use crate::video::{is_ffmpeg_whisper_available, is_whisper_cpp_available};
-use regex::Regex;
+use tokio::fs;
+use tokio::process::Command as TokioCommand;
 
 /// Transcribe audio using whisper.cpp CLI (preferred method)
 pub async fn transcribe_with_whisper_cpp(
@@ -14,7 +17,7 @@ pub async fn transcribe_with_whisper_cpp(
     audio_path: &str,
     model: Option<String>,
     language: Option<String>,
-    mut emit: impl FnMut(RpcEvent)
+    mut emit: impl FnMut(RpcEvent),
 ) -> anyhow::Result<WhisperResponse> {
     // Use requested model or default to tiny
     let whisper_model = match model.as_deref() {
@@ -24,12 +27,18 @@ pub async fn transcribe_with_whisper_cpp(
 
     emit(RpcEvent::Log {
         id: id.into(),
-        message: format!("Starting local whisper.cpp transcription with model: {}", whisper_model)
+        message: format!(
+            "Starting local whisper.cpp transcription with model: {}",
+            whisper_model
+        ),
     });
 
     emit(RpcEvent::Log {
         id: id.into(),
-        message: format!("Model requested: {}, DTW preset: disabled (testing without DTW)", whisper_model)
+        message: format!(
+            "Model requested: {}, DTW preset: disabled (testing without DTW)",
+            whisper_model
+        ),
     });
 
     // Find model with fallbacks
@@ -38,27 +47,30 @@ pub async fn transcribe_with_whisper_cpp(
     if actual_model != whisper_model {
         emit(RpcEvent::Log {
             id: id.into(),
-            message: format!("Model '{}' not found, using '{}' instead", whisper_model, actual_model)
+            message: format!(
+                "Model '{}' not found, using '{}' instead",
+                whisper_model, actual_model
+            ),
         });
     }
 
     emit(RpcEvent::Log {
         id: id.into(),
-        message: format!("Using model file: {} ({})", model_path, actual_model)
+        message: format!("Using model file: {} ({})", model_path, actual_model),
     });
 
     let whisper_binary = match find_whisper_binary().await {
         Ok(binary) => {
             emit(RpcEvent::Log {
                 id: id.into(),
-                message: format!("Found whisper binary at: {}", binary)
+                message: format!("Found whisper binary at: {}", binary),
             });
             binary
         }
         Err(e) => {
             emit(RpcEvent::Log {
                 id: id.into(),
-                message: format!("Failed to find whisper binary: {}", e)
+                message: format!("Failed to find whisper binary: {}", e),
             });
             return Err(e);
         }
@@ -66,15 +78,18 @@ pub async fn transcribe_with_whisper_cpp(
     let mut cmd = TokioCommand::new(&whisper_binary);
     // DTW disabled - causes timestamp issues for some audio files
 
-
-    cmd.arg("-m").arg(&model_path)
-       .arg("--output-json-full")    // Full JSON output
-       .arg("--no-prints")          // Suppress progress output
-       .arg("--word-thold").arg("0.01")   // Better word boundary detection
-       .arg("--max-len").arg("0")         // No segment length limit
-       .arg("--output-words")            // Enable word-level timestamps
-       .arg("--entropy-thold").arg("2.8") // Anti-repetition
-       .arg("--suppress-nst");           // Suppress non-speech tokens
+    cmd.arg("-m")
+        .arg(&model_path)
+        .arg("--output-json-full") // Full JSON output
+        .arg("--no-prints") // Suppress progress output
+        .arg("--word-thold")
+        .arg("0.01") // Better word boundary detection
+        .arg("--max-len")
+        .arg("0") // No segment length limit
+        .arg("--output-words") // Enable word-level timestamps
+        .arg("--entropy-thold")
+        .arg("2.8") // Anti-repetition
+        .arg("--suppress-nst"); // Suppress non-speech tokens
 
     cmd.arg(audio_path);
 
@@ -82,8 +97,7 @@ pub async fn transcribe_with_whisper_cpp(
         cmd.arg("-l").arg(lang);
     }
 
-    cmd.stdout(Stdio::piped())
-       .stderr(Stdio::piped());
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let output = cmd.output().await?;
 
@@ -91,20 +105,30 @@ pub async fn transcribe_with_whisper_cpp(
     let stderr = String::from_utf8_lossy(&output.stderr);
     emit(RpcEvent::Log {
         id: id.into(),
-        message: format!("whisper.cpp stdout: {}", stdout.chars().take(500).collect::<String>())
+        message: format!(
+            "whisper.cpp stdout: {}",
+            stdout.chars().take(500).collect::<String>()
+        ),
     });
     emit(RpcEvent::Log {
         id: id.into(),
-        message: format!("whisper.cpp stderr: {}", stderr.chars().take(500).collect::<String>())
+        message: format!(
+            "whisper.cpp stderr: {}",
+            stderr.chars().take(500).collect::<String>()
+        ),
     });
 
     if !output.status.success() {
-        return Err(anyhow::anyhow!("whisper.cpp failed with status {}: {}", output.status, stderr));
+        return Err(anyhow::anyhow!(
+            "whisper.cpp failed with status {}: {}",
+            output.status,
+            stderr
+        ));
     }
 
     emit(RpcEvent::Log {
         id: id.into(),
-        message: "Parsing whisper.cpp output...".into()
+        message: "Parsing whisper.cpp output...".into(),
     });
 
     // whisper.cpp creates a JSON file next to the audio file
@@ -112,14 +136,14 @@ pub async fn transcribe_with_whisper_cpp(
 
     emit(RpcEvent::Log {
         id: id.into(),
-        message: format!("Looking for JSON output at: {}", json_file_path)
+        message: format!("Looking for JSON output at: {}", json_file_path),
     });
 
     // Check if file exists before trying to read
     if !std::path::Path::new(&json_file_path).exists() {
         emit(RpcEvent::Log {
             id: id.into(),
-            message: format!("JSON file does not exist at: {}", json_file_path)
+            message: format!("JSON file does not exist at: {}", json_file_path),
         });
 
         // List files in the directory to see what was actually created
@@ -131,12 +155,15 @@ pub async fn transcribe_with_whisper_cpp(
                     .collect();
                 emit(RpcEvent::Log {
                     id: id.into(),
-                    message: format!("Files in directory: {:?}", files)
+                    message: format!("Files in directory: {:?}", files),
                 });
             }
         }
 
-        return Err(anyhow::anyhow!("whisper.cpp did not create expected JSON output file: {}", json_file_path));
+        return Err(anyhow::anyhow!(
+            "whisper.cpp did not create expected JSON output file: {}",
+            json_file_path
+        ));
     }
 
     let json_content = std::fs::read_to_string(&json_file_path)
@@ -145,7 +172,10 @@ pub async fn transcribe_with_whisper_cpp(
     // Debug: Log first 1000 chars of JSON to understand structure
     emit(RpcEvent::Log {
         id: id.into(),
-        message: format!("whisper.cpp JSON preview: {}", &json_content.chars().take(1000).collect::<String>())
+        message: format!(
+            "whisper.cpp JSON preview: {}",
+            &json_content.chars().take(1000).collect::<String>()
+        ),
     });
 
     // Parse the JSON output from file
@@ -153,10 +183,20 @@ pub async fn transcribe_with_whisper_cpp(
 
     emit(RpcEvent::Log {
         id: id.into(),
-        message: format!("Local whisper.cpp transcription completed. Duration: {:.2}s, Segments: {}, Words: {}",
+        message: format!(
+            "Local whisper.cpp transcription completed. Duration: {:.2}s, Segments: {}, Words: {}",
             whisper_response.duration.unwrap_or(0.0),
-            whisper_response.segments.as_ref().map(|s| s.len()).unwrap_or(0),
-            whisper_response.words.as_ref().map(|w| w.len()).unwrap_or(0))
+            whisper_response
+                .segments
+                .as_ref()
+                .map(|s| s.len())
+                .unwrap_or(0),
+            whisper_response
+                .words
+                .as_ref()
+                .map(|w| w.len())
+                .unwrap_or(0)
+        ),
     });
 
     Ok(whisper_response)
@@ -191,14 +231,21 @@ async fn ensure_whisper_model(model: &str) -> anyhow::Result<(String, String)> {
         if let Ok(models_dir) = get_models_dir() {
             let model_path = models_dir.join(model_filename);
             if model_path.exists() {
-                return Ok((model_path.to_string_lossy().to_string(), fallback_model.to_string()));
+                return Ok((
+                    model_path.to_string_lossy().to_string(),
+                    fallback_model.to_string(),
+                ));
             }
         }
 
         // Also check system-wide locations as fallback
         let system_paths = vec![
             format!("/opt/homebrew/share/whisper-models/{}", model_filename),
-            format!("{}/.cache/whisper/{}", std::env::var("HOME").unwrap_or_default(), model_filename),
+            format!(
+                "{}/.cache/whisper/{}",
+                std::env::var("HOME").unwrap_or_default(),
+                model_filename
+            ),
         ];
 
         for path in system_paths {
@@ -209,7 +256,10 @@ async fn ensure_whisper_model(model: &str) -> anyhow::Result<(String, String)> {
     }
 
     // No models found locally - this will trigger OpenAI API fallback at higher level
-    Err(anyhow::anyhow!("No whisper models found locally. Tried fallback chain: {:?}", fallback_chain))
+    Err(anyhow::anyhow!(
+        "No whisper models found locally. Tried fallback chain: {:?}",
+        fallback_chain
+    ))
 }
 
 /// Find whisper.cpp binary across different locations and platforms
@@ -247,7 +297,9 @@ pub async fn find_whisper_binary() -> anyhow::Result<String> {
         }
     }
 
-    Err(anyhow::anyhow!("whisper.cpp binary not found in any location"))
+    Err(anyhow::anyhow!(
+        "whisper.cpp binary not found in any location"
+    ))
 }
 
 /// Get possible bundled whisper binary paths (next to executable)
@@ -257,19 +309,19 @@ fn get_bundled_whisper_paths(exe_dir: &std::path::Path) -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         if cfg!(target_arch = "aarch64") {
-            paths.push(exe_dir.join("bin/whisper-cli-macos-arm64"));  // Check bin subdirectory first
+            paths.push(exe_dir.join("bin/whisper-cli-macos-arm64")); // Check bin subdirectory first
             paths.push(exe_dir.join("whisper-cli-macos-arm64"));
             paths.push(exe_dir.join("bin/whisper-macos-arm64"));
             paths.push(exe_dir.join("whisper-macos-arm64"));
         } else {
-            paths.push(exe_dir.join("bin/whisper-cli-macos-x64"));    // Check bin subdirectory first
+            paths.push(exe_dir.join("bin/whisper-cli-macos-x64")); // Check bin subdirectory first
             paths.push(exe_dir.join("whisper-cli-macos-x64"));
             paths.push(exe_dir.join("bin/whisper-macos-x64"));
             paths.push(exe_dir.join("whisper-macos-x64"));
         }
-        paths.push(exe_dir.join("bin/whisper-cli"));                  // Check bin subdirectory first
+        paths.push(exe_dir.join("bin/whisper-cli")); // Check bin subdirectory first
         paths.push(exe_dir.join("whisper-cli"));
-        paths.push(exe_dir.join("bin/whisper"));                      // Check bin subdirectory first
+        paths.push(exe_dir.join("bin/whisper")); // Check bin subdirectory first
         paths.push(exe_dir.join("whisper"));
     }
 
@@ -298,9 +350,9 @@ fn get_bundled_whisper_paths(exe_dir: &std::path::Path) -> Vec<PathBuf> {
             paths.push(exe_dir.join("bin/whisper-linux-arm64")); // Check bin subdirectory first
             paths.push(exe_dir.join("whisper-linux-arm64"));
         }
-        paths.push(exe_dir.join("bin/whisper-cli"));          // Check bin subdirectory first
+        paths.push(exe_dir.join("bin/whisper-cli")); // Check bin subdirectory first
         paths.push(exe_dir.join("whisper-cli"));
-        paths.push(exe_dir.join("bin/whisper"));              // Check bin subdirectory first
+        paths.push(exe_dir.join("bin/whisper")); // Check bin subdirectory first
         paths.push(exe_dir.join("whisper"));
     }
 
@@ -452,19 +504,19 @@ fn get_bundled_ffmpeg_paths(exe_dir: &std::path::Path) -> Vec<PathBuf> {
 
     #[cfg(target_os = "macos")]
     {
-        paths.push(exe_dir.join("bin/ffmpeg"));  // Check bin subdirectory first
+        paths.push(exe_dir.join("bin/ffmpeg")); // Check bin subdirectory first
         paths.push(exe_dir.join("ffmpeg"));
     }
 
     #[cfg(target_os = "windows")]
     {
-        paths.push(exe_dir.join("bin/ffmpeg.exe"));  // Check bin subdirectory first
+        paths.push(exe_dir.join("bin/ffmpeg.exe")); // Check bin subdirectory first
         paths.push(exe_dir.join("ffmpeg.exe"));
     }
 
     #[cfg(target_os = "linux")]
     {
-        paths.push(exe_dir.join("bin/ffmpeg"));      // Check bin subdirectory first
+        paths.push(exe_dir.join("bin/ffmpeg")); // Check bin subdirectory first
         paths.push(exe_dir.join("ffmpeg"));
     }
 
@@ -472,9 +524,12 @@ fn get_bundled_ffmpeg_paths(exe_dir: &std::path::Path) -> Vec<PathBuf> {
 }
 
 /// Get possible project FFmpeg binary paths
+/// Get possible project FFmpeg binary paths
 fn get_project_ffmpeg_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    let bin_dir = std::env::current_dir().unwrap_or_default().join("bin");
+    // Use proper Cargo manifest directory to find bin folder (same as whisper paths)
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let bin_dir = project_root.join("bin");
 
     #[cfg(target_os = "macos")]
     {
@@ -510,19 +565,19 @@ fn get_bundled_ffprobe_paths(exe_dir: &std::path::Path) -> Vec<PathBuf> {
 
     #[cfg(target_os = "macos")]
     {
-        paths.push(exe_dir.join("bin/ffprobe"));  // Check bin subdirectory first
+        paths.push(exe_dir.join("bin/ffprobe")); // Check bin subdirectory first
         paths.push(exe_dir.join("ffprobe"));
     }
 
     #[cfg(target_os = "windows")]
     {
-        paths.push(exe_dir.join("bin/ffprobe.exe"));  // Check bin subdirectory first
+        paths.push(exe_dir.join("bin/ffprobe.exe")); // Check bin subdirectory first
         paths.push(exe_dir.join("ffprobe.exe"));
     }
 
     #[cfg(target_os = "linux")]
     {
-        paths.push(exe_dir.join("bin/ffprobe"));      // Check bin subdirectory first
+        paths.push(exe_dir.join("bin/ffprobe")); // Check bin subdirectory first
         paths.push(exe_dir.join("ffprobe"));
     }
 
@@ -530,9 +585,12 @@ fn get_bundled_ffprobe_paths(exe_dir: &std::path::Path) -> Vec<PathBuf> {
 }
 
 /// Get possible project ffprobe binary paths
+/// Get possible project ffprobe binary paths
 fn get_project_ffprobe_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    let bin_dir = std::env::current_dir().unwrap_or_default().join("bin");
+    // Use proper Cargo manifest directory to find bin folder (same as whisper paths)
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let bin_dir = project_root.join("bin");
 
     #[cfg(target_os = "macos")]
     {
@@ -564,18 +622,20 @@ fn get_system_ffprobe_paths() -> Vec<String> {
 
 /// Get download URL for whisper model
 fn get_model_download_url(model_filename: &str) -> String {
-    format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}", model_filename)
+    format!(
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}",
+        model_filename
+    )
 }
-
 
 /// Public RPC method to download a whisper model with progress reporting
 pub async fn download_model_rpc(
     id: &str,
     params: crate::types::DownloadModelParams,
-    mut emit: impl FnMut(crate::rpc::RpcEvent)
+    mut emit: impl FnMut(crate::rpc::RpcEvent),
 ) -> anyhow::Result<crate::types::DownloadModelResult> {
-    use tokio::io::AsyncWriteExt;
     use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
 
     let model_filename = match params.model.as_str() {
         "tiny" => "ggml-tiny.bin",
@@ -584,22 +644,34 @@ pub async fn download_model_rpc(
         "medium" => "ggml-medium.bin",
         "large" => "ggml-large-v3.bin",
         "turbo" => "ggml-large-v3-turbo.bin",
-        _ => return Err(anyhow::anyhow!("Unknown model: {}. Supported: tiny, base, small, medium, large, turbo", params.model))
+        _ => {
+            return Err(anyhow::anyhow!(
+                "Unknown model: {}. Supported: tiny, base, small, medium, large, turbo",
+                params.model
+            ))
+        }
     };
 
     let url = get_model_download_url(model_filename);
-    let models_dir = get_models_dir()
-        .map_err(|e| anyhow::anyhow!("Cannot access models directory: {}. Please check app permissions.", e))?;
+    let models_dir = get_models_dir().map_err(|e| {
+        anyhow::anyhow!(
+            "Cannot access models directory: {}. Please check app permissions.",
+            e
+        )
+    })?;
     let output_path = models_dir.join(model_filename);
 
     emit(crate::rpc::RpcEvent::Log {
         id: id.into(),
-        message: format!("Models will be saved to: {}", models_dir.display())
+        message: format!("Models will be saved to: {}", models_dir.display()),
     });
 
     emit(crate::rpc::RpcEvent::Log {
         id: id.into(),
-        message: format!("Starting download of {} model from HuggingFace", params.model)
+        message: format!(
+            "Starting download of {} model from HuggingFace",
+            params.model
+        ),
     });
 
     // Download with progress
@@ -607,14 +679,21 @@ pub async fn download_model_rpc(
     let response = client.get(&url).send().await?;
 
     if !response.status().is_success() {
-        return Err(anyhow::anyhow!("Failed to download model: HTTP {}", response.status()));
+        return Err(anyhow::anyhow!(
+            "Failed to download model: HTTP {}",
+            response.status()
+        ));
     }
 
     let total_size = response.content_length().unwrap_or(0);
 
     emit(crate::rpc::RpcEvent::Log {
         id: id.into(),
-        message: format!("Downloading {} ({:.1} MB)...", model_filename, total_size as f64 / 1024.0 / 1024.0)
+        message: format!(
+            "Downloading {} ({:.1} MB)...",
+            model_filename,
+            total_size as f64 / 1024.0 / 1024.0
+        ),
     });
 
     let mut file = tokio::fs::File::create(&output_path).await
@@ -636,7 +715,7 @@ pub async fn download_model_rpc(
         emit(crate::rpc::RpcEvent::Progress {
             id: id.into(),
             status: format!("Downloading {}...", params.model),
-            progress
+            progress,
         });
     }
 
@@ -644,13 +723,17 @@ pub async fn download_model_rpc(
 
     emit(crate::rpc::RpcEvent::Log {
         id: id.into(),
-        message: format!("Successfully downloaded {} model to {}", params.model, output_path.display())
+        message: format!(
+            "Successfully downloaded {} model to {}",
+            params.model,
+            output_path.display()
+        ),
     });
 
     Ok(crate::types::DownloadModelResult {
         model: params.model,
         path: output_path.to_string_lossy().to_string(),
-        size: downloaded
+        size: downloaded,
     })
 }
 
@@ -663,11 +746,15 @@ pub fn check_model_exists(model_name: &str) -> anyhow::Result<bool> {
         "medium" => "ggml-medium.bin",
         "large" => "ggml-large-v3.bin",
         "turbo" => "ggml-large-v3-turbo.bin",
-        _ => return Ok(false)
+        _ => return Ok(false),
     };
 
-    let models_dir = get_models_dir()
-        .map_err(|e| anyhow::anyhow!("Cannot access models directory: {}. Please check app permissions.", e))?;
+    let models_dir = get_models_dir().map_err(|e| {
+        anyhow::anyhow!(
+            "Cannot access models directory: {}. Please check app permissions.",
+            e
+        )
+    })?;
     let model_path = models_dir.join(model_filename);
     Ok(model_path.exists())
 }
@@ -686,8 +773,13 @@ fn get_models_dir() -> anyhow::Result<std::path::PathBuf> {
         if let Some(home_dir) = std::env::var_os("HOME") {
             let app_support = std::path::PathBuf::from(home_dir)
                 .join("Library/Application Support/CapSlap/models");
-            std::fs::create_dir_all(&app_support)
-                .map_err(|e| anyhow::anyhow!("Failed to create models directory at {}: {}", app_support.display(), e))?;
+            std::fs::create_dir_all(&app_support).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to create models directory at {}: {}",
+                    app_support.display(),
+                    e
+                )
+            })?;
             return Ok(app_support);
         }
     }
@@ -743,9 +835,15 @@ fn parse_whisper_cpp_output(json_output: &str) -> anyhow::Result<WhisperResponse
         if let Some(array) = transcription.as_array() {
             for (i, segment) in array.iter().enumerate() {
                 if let (Some(start), Some(end), Some(text)) = (
-                    segment.get("offsets").and_then(|o| o.get("from")).and_then(|f| f.as_f64()),
-                    segment.get("offsets").and_then(|o| o.get("to")).and_then(|t| t.as_f64()),
-                    segment.get("text").and_then(|t| t.as_str())
+                    segment
+                        .get("offsets")
+                        .and_then(|o| o.get("from"))
+                        .and_then(|f| f.as_f64()),
+                    segment
+                        .get("offsets")
+                        .and_then(|o| o.get("to"))
+                        .and_then(|t| t.as_f64()),
+                    segment.get("text").and_then(|t| t.as_str()),
                 ) {
                     let start_sec = start / 1000.0; // Convert ms to seconds
                     let end_sec = end / 1000.0;
@@ -812,36 +910,44 @@ fn parse_whisper_cpp_output(json_output: &str) -> anyhow::Result<WhisperResponse
                     // Prioritize "words" (full words) over "tokens" (sub-word tokens)
                     // Parse word-level timestamps from tokens array
                     // Prioritize "words" (full words) over "tokens" (sub-word tokens)
-                    
-                    let (tokens_array, is_subword_tokens) = if let Some(arr) = segment.get("words").and_then(|w| w.as_array()) {
-                        (Some(arr), false) 
-                    } else if let Some(arr) = segment.get("tokens").and_then(|t| t.as_array()) {
-                        (Some(arr), true)
-                    } else {
-                        (None, false)
-                    };
+
+                    let (tokens_array, is_subword_tokens) =
+                        if let Some(arr) = segment.get("words").and_then(|w| w.as_array()) {
+                            (Some(arr), false)
+                        } else if let Some(arr) = segment.get("tokens").and_then(|t| t.as_array()) {
+                            (Some(arr), true)
+                        } else {
+                            (None, false)
+                        };
 
                     if let Some(tokens) = tokens_array {
                         let mut current_merged_word: Option<crate::types::WhisperWord> = None;
 
                         for token in tokens {
                             // Try different JSON structures for token timing
-                            let (token_text, token_start, token_end) = if let (Some(text), Some(start), Some(end)) = (
-                                token.get("text").and_then(|t| t.as_str()),
-                                token.get("offsets").and_then(|o| o.get("from")).and_then(|f| f.as_f64()),
-                                token.get("offsets").and_then(|o| o.get("to")).and_then(|t| t.as_f64()),
-                            ) {
-                                (text, start, end)
-                            } else if let (Some(text), Some(start), Some(end)) = (
-                                token.get("word").and_then(|t| t.as_str()),
-                                token.get("start").and_then(|s| s.as_f64()),
-                                token.get("end").and_then(|e| e.as_f64()),
-                            ) {
-                                // Alternative JSON format: direct start/end fields in seconds
-                                (text, start * 1000.0, end * 1000.0) // Convert to ms for consistency
-                            } else {
-                                continue; // Skip if we can't parse this token
-                            };
+                            let (token_text, token_start, token_end) =
+                                if let (Some(text), Some(start), Some(end)) = (
+                                    token.get("text").and_then(|t| t.as_str()),
+                                    token
+                                        .get("offsets")
+                                        .and_then(|o| o.get("from"))
+                                        .and_then(|f| f.as_f64()),
+                                    token
+                                        .get("offsets")
+                                        .and_then(|o| o.get("to"))
+                                        .and_then(|t| t.as_f64()),
+                                ) {
+                                    (text, start, end)
+                                } else if let (Some(text), Some(start), Some(end)) = (
+                                    token.get("word").and_then(|t| t.as_str()),
+                                    token.get("start").and_then(|s| s.as_f64()),
+                                    token.get("end").and_then(|e| e.as_f64()),
+                                ) {
+                                    // Alternative JSON format: direct start/end fields in seconds
+                                    (text, start * 1000.0, end * 1000.0) // Convert to ms for consistency
+                                } else {
+                                    continue; // Skip if we can't parse this token
+                                };
 
                             let token_start_sec = token_start / 1000.0;
                             let token_end_sec = token_end / 1000.0;
@@ -854,12 +960,18 @@ fn parse_whisper_cpp_output(json_output: &str) -> anyhow::Result<WhisperResponse
                             if is_subword_tokens {
                                 // Merge logic for BPE tokens
                                 let starts_with_space = token_text.starts_with(' ');
-                                let _is_punctuation = token_text.trim().len() == 1 && token_text.trim().chars().next().unwrap().is_ascii_punctuation();
-                                
+                                let _is_punctuation = token_text.trim().len() == 1
+                                    && token_text
+                                        .trim()
+                                        .chars()
+                                        .next()
+                                        .unwrap()
+                                        .is_ascii_punctuation();
+
                                 // Decision: Is this a new word?
                                 // Standard Whisper: new word starts with space.
                                 // But also check if we have no current word.
-                                
+
                                 if starts_with_space || current_merged_word.is_none() {
                                     // Flush previous word if exists
                                     if let Some(mut w) = current_merged_word.take() {
@@ -868,7 +980,7 @@ fn parse_whisper_cpp_output(json_output: &str) -> anyhow::Result<WhisperResponse
                                             words.push(w);
                                         }
                                     }
-                                    
+
                                     // Start new word
                                     current_merged_word = Some(crate::types::WhisperWord {
                                         word: token_text.to_string(),
@@ -896,7 +1008,7 @@ fn parse_whisper_cpp_output(json_output: &str) -> anyhow::Result<WhisperResponse
                                 }
                             }
                         }
-                        
+
                         // Flush last merged word
                         if let Some(mut w) = current_merged_word.take() {
                             w.word = w.word.trim().to_string();
@@ -913,7 +1025,9 @@ fn parse_whisper_cpp_output(json_output: &str) -> anyhow::Result<WhisperResponse
     full_text = full_text.trim().to_string();
 
     if full_text.is_empty() {
-        return Err(anyhow::anyhow!("No transcription text found in whisper.cpp output"));
+        return Err(anyhow::anyhow!(
+            "No transcription text found in whisper.cpp output"
+        ));
     }
 
     let response = WhisperResponse {
@@ -922,7 +1036,11 @@ fn parse_whisper_cpp_output(json_output: &str) -> anyhow::Result<WhisperResponse
         duration: Some(duration),
         text: full_text,
         segments: Some(segments.clone()),
-        words: if words.is_empty() { None } else { Some(words.clone()) },
+        words: if words.is_empty() {
+            None
+        } else {
+            Some(words.clone())
+        },
     };
 
     Ok(response)
@@ -934,21 +1052,27 @@ pub async fn transcribe_with_ffmpeg_whisper(
     audio_path: &str,
     model: Option<String>,
     language: Option<String>,
-    mut emit: impl FnMut(RpcEvent)
+    mut emit: impl FnMut(RpcEvent),
 ) -> anyhow::Result<WhisperResponse> {
     let whisper_model = model.unwrap_or_else(|| "medium".to_string());
 
     emit(RpcEvent::Log {
         id: id.into(),
-        message: format!("Starting local FFmpeg Whisper transcription with model: {}", whisper_model)
+        message: format!(
+            "Starting local FFmpeg Whisper transcription with model: {}",
+            whisper_model
+        ),
     });
 
-    let ffmpeg_path = find_ffmpeg_binary().await.map_err(|e| anyhow::anyhow!("FFmpeg not found: {}", e))?;
+    let ffmpeg_path = find_ffmpeg_binary()
+        .await
+        .map_err(|e| anyhow::anyhow!("FFmpeg not found: {}", e))?;
     let mut cmd = TokioCommand::new(ffmpeg_path);
     cmd.kill_on_drop(true);
     cmd.arg("-y") // overwrite output
-       .arg("-i").arg(audio_path)
-       .arg("-af");
+        .arg("-i")
+        .arg(audio_path)
+        .arg("-af");
 
     // Build whisper filter arguments
     let mut whisper_filter = format!("whisper=model={}:print_text=1", whisper_model);
@@ -958,14 +1082,15 @@ pub async fn transcribe_with_ffmpeg_whisper(
     }
 
     cmd.arg(whisper_filter)
-       .arg("-f").arg("null")
-       .arg("-")
-       .stdout(Stdio::piped())
-       .stderr(Stdio::piped());
+        .arg("-f")
+        .arg("null")
+        .arg("-")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
     emit(RpcEvent::Log {
         id: id.into(),
-        message: "Running FFmpeg Whisper transcription...".into()
+        message: "Running FFmpeg Whisper transcription...".into(),
     });
 
     let output = cmd.output().await?;
@@ -979,7 +1104,7 @@ pub async fn transcribe_with_ffmpeg_whisper(
 
     emit(RpcEvent::Log {
         id: id.into(),
-        message: "Parsing FFmpeg Whisper output...".into()
+        message: "Parsing FFmpeg Whisper output...".into(),
     });
 
     // Parse the whisper output from stderr
@@ -987,7 +1112,10 @@ pub async fn transcribe_with_ffmpeg_whisper(
 
     emit(RpcEvent::Log {
         id: id.into(),
-        message: format!("Local FFmpeg Whisper transcription completed. Duration: {:.2}s", whisper_response.duration.unwrap_or(0.0))
+        message: format!(
+            "Local FFmpeg Whisper transcription completed. Duration: {:.2}s",
+            whisper_response.duration.unwrap_or(0.0)
+        ),
     });
 
     Ok(whisper_response)
@@ -1045,7 +1173,9 @@ fn parse_ffmpeg_whisper_output(stderr: &str) -> anyhow::Result<WhisperResponse> 
     full_text = full_text.trim().to_string();
 
     if full_text.is_empty() {
-        return Err(anyhow::anyhow!("No transcription text found in FFmpeg output"));
+        return Err(anyhow::anyhow!(
+            "No transcription text found in FFmpeg output"
+        ));
     }
 
     Ok(WhisperResponse {
@@ -1064,7 +1194,7 @@ async fn create_transcription_result(
     segments: &[CaptionSegment],
     whisper_response: &WhisperResponse,
     params: &TranscribeSegmentsParams,
-    temp_dir: Option<&std::path::PathBuf>
+    temp_dir: Option<&std::path::PathBuf>,
 ) -> anyhow::Result<TranscribeSegmentsResult> {
     use tokio::fs;
 
@@ -1108,13 +1238,22 @@ async fn create_transcription_result(
     })
 }
 
-pub async fn transcribe_segments(id: &str, p: TranscribeSegmentsParams, emit: impl FnMut(RpcEvent)) -> anyhow::Result<TranscribeSegmentsResult> {
+pub async fn transcribe_segments(
+    id: &str,
+    p: TranscribeSegmentsParams,
+    emit: impl FnMut(RpcEvent),
+) -> anyhow::Result<TranscribeSegmentsResult> {
     transcribe_segments_with_temp(id, p, None, emit).await
 }
 
-pub async fn transcribe_segments_with_temp(id: &str, p: TranscribeSegmentsParams, temp_dir: Option<&std::path::PathBuf>, mut emit: impl FnMut(RpcEvent)) -> anyhow::Result<TranscribeSegmentsResult> {
-    use reqwest::multipart;
+pub async fn transcribe_segments_with_temp(
+    id: &str,
+    p: TranscribeSegmentsParams,
+    temp_dir: Option<&std::path::PathBuf>,
+    mut emit: impl FnMut(RpcEvent),
+) -> anyhow::Result<TranscribeSegmentsResult> {
     use mime_guess::MimeGuess;
+    use reqwest::multipart;
     use tokio::fs;
 
     // QUICK SWITCH: Set to false to force OpenAI API, true for local whisper
@@ -1171,42 +1310,64 @@ pub async fn transcribe_segments_with_temp(id: &str, p: TranscribeSegmentsParams
     if !use_openai_directly && USE_LOCAL_WHISPER && is_whisper_cpp_available().await {
         emit(RpcEvent::Log {
             id: id.into(),
-            message: "whisper.cpp detected, attempting local transcription...".into()
+            message: "whisper.cpp detected, attempting local transcription...".into(),
         });
 
-        match transcribe_with_whisper_cpp(id, &p.audio, p.model.clone(), p.language.clone(), &mut emit).await {
+        match transcribe_with_whisper_cpp(
+            id,
+            &p.audio,
+            p.model.clone(),
+            p.language.clone(),
+            &mut emit,
+        )
+        .await
+        {
             Ok(whisper_response) => {
                 emit(RpcEvent::Log {
                     id: id.into(),
-                    message: "Local whisper.cpp transcription successful".into()
+                    message: "Local whisper.cpp transcription successful".into(),
                 });
 
                 let segments = whisper_to_caption_segments(&whisper_response, p.split_by_words);
 
                 emit(RpcEvent::Log {
                     id: id.into(),
-                    message: format!("Converted to {} caption segments (split_by_words={})",
-                        segments.len(), p.split_by_words)
+                    message: format!(
+                        "Converted to {} caption segments (split_by_words={})",
+                        segments.len(),
+                        p.split_by_words
+                    ),
                 });
 
                 // Save to cache
-                if let Err(e) = save_cached_whisper_response(&p.audio, &p, &whisper_response).await {
-                    emit(RpcEvent::Log { id: id.into(), message: format!("Failed to cache local transcription: {}", e) });
+                if let Err(e) = save_cached_whisper_response(&p.audio, &p, &whisper_response).await
+                {
+                    emit(RpcEvent::Log {
+                        id: id.into(),
+                        message: format!("Failed to cache local transcription: {}", e),
+                    });
                 }
 
                 // Generate JSON file and return result
-                return create_transcription_result(id, &segments, &whisper_response, &p, temp_dir).await;
+                return create_transcription_result(id, &segments, &whisper_response, &p, temp_dir)
+                    .await;
             }
             Err(e) => {
                 let error_msg = if e.to_string().contains("No whisper models found") {
-                    format!("No local whisper models available, falling back to OpenAI API. ({})", e)
+                    format!(
+                        "No local whisper models available, falling back to OpenAI API. ({})",
+                        e
+                    )
                 } else {
-                    format!("Local whisper.cpp failed: {}, falling back to OpenAI API", e)
+                    format!(
+                        "Local whisper.cpp failed: {}, falling back to OpenAI API",
+                        e
+                    )
                 };
 
                 emit(RpcEvent::Log {
                     id: id.into(),
-                    message: error_msg
+                    message: error_msg,
                 });
             }
         }
@@ -1216,30 +1377,43 @@ pub async fn transcribe_segments_with_temp(id: &str, p: TranscribeSegmentsParams
     if !use_openai_directly && USE_LOCAL_WHISPER && is_ffmpeg_whisper_available().await {
         emit(RpcEvent::Log {
             id: id.into(),
-            message: "FFmpeg Whisper detected, attempting local transcription...".into()
+            message: "FFmpeg Whisper detected, attempting local transcription...".into(),
         });
 
-        match transcribe_with_ffmpeg_whisper(id, &p.audio, p.model.clone(), p.language.clone(), &mut emit).await {
+        match transcribe_with_ffmpeg_whisper(
+            id,
+            &p.audio,
+            p.model.clone(),
+            p.language.clone(),
+            &mut emit,
+        )
+        .await
+        {
             Ok(whisper_response) => {
                 emit(RpcEvent::Log {
                     id: id.into(),
-                    message: "Local FFmpeg Whisper transcription successful".into()
+                    message: "Local FFmpeg Whisper transcription successful".into(),
                 });
 
                 let segments = whisper_to_caption_segments(&whisper_response, p.split_by_words);
 
                 // Save to cache
-                if let Err(e) = save_cached_whisper_response(&p.audio, &p, &whisper_response).await {
-                    emit(RpcEvent::Log { id: id.into(), message: format!("Failed to cache local transcription: {}", e) });
+                if let Err(e) = save_cached_whisper_response(&p.audio, &p, &whisper_response).await
+                {
+                    emit(RpcEvent::Log {
+                        id: id.into(),
+                        message: format!("Failed to cache local transcription: {}", e),
+                    });
                 }
 
                 // Generate JSON file and return result
-                return create_transcription_result(id, &segments, &whisper_response, &p, temp_dir).await;
+                return create_transcription_result(id, &segments, &whisper_response, &p, temp_dir)
+                    .await;
             }
             Err(e) => {
                 emit(RpcEvent::Log {
                     id: id.into(),
-                    message: format!("Local FFmpeg Whisper failed: {}, falling back to API", e)
+                    message: format!("Local FFmpeg Whisper failed: {}, falling back to API", e),
                 });
             }
         }
@@ -1247,22 +1421,35 @@ pub async fn transcribe_segments_with_temp(id: &str, p: TranscribeSegmentsParams
 
     emit(RpcEvent::Log {
         id: id.into(),
-        message: "No local Whisper available, using OpenAI API".into()
+        message: "No local Whisper available, using OpenAI API".into(),
     });
 
     // Fallback to OpenAI API
-    let api_key = p.api_key.as_ref().ok_or_else(|| anyhow::anyhow!("OpenAI API key not provided"))?;
+    let api_key = p
+        .api_key
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("OpenAI API key not provided"))?;
     // Always use whisper-1 for OpenAI API (local model names like "tiny" are not valid for the API)
     let model = "whisper-1".to_string();
 
     let bytes = fs::read(&p.audio).await?;
-    let filename = std::path::Path::new(&p.audio).file_name().unwrap_or_default().to_string_lossy().to_string();
+    let filename = std::path::Path::new(&p.audio)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let mime = MimeGuess::from_path(&p.audio).first_or_octet_stream();
 
     // build form for verbose_json with appropriate timestamp granularities
     let mut form = multipart::Form::new()
         .text("model", model.clone())
-        .part("file", multipart::Part::bytes(bytes.clone()).file_name(filename.clone()).mime_str(mime.as_ref()).unwrap())
+        .part(
+            "file",
+            multipart::Part::bytes(bytes.clone())
+                .file_name(filename.clone())
+                .mime_str(mime.as_ref())
+                .unwrap(),
+        )
         .text("response_format", "verbose_json".to_string());
 
     if let Some(lang) = &p.language {
@@ -1279,9 +1466,12 @@ pub async fn transcribe_segments_with_temp(id: &str, p: TranscribeSegmentsParams
         form = form.text("timestamp_granularities[]", "segment".to_string());
     }
 
-    let client = reqwest::Client::builder().user_agent("core/1.0.0").build()?;
+    let client = reqwest::Client::builder()
+        .user_agent("core/1.0.0")
+        .build()?;
 
-    let resp = client.post("https://api.openai.com/v1/audio/transcriptions")
+    let resp = client
+        .post("https://api.openai.com/v1/audio/transcriptions")
         .header("Authorization", format!("Bearer {}", api_key))
         .multipart(form)
         .send()
@@ -1299,12 +1489,14 @@ pub async fn transcribe_segments_with_temp(id: &str, p: TranscribeSegmentsParams
 
     // Save to cache
     if let Err(e) = save_cached_whisper_response(&p.audio, &p, &whisper_response).await {
-        emit(RpcEvent::Log { id: id.into(), message: format!("Failed to cache transcription: {}", e) });
+        emit(RpcEvent::Log {
+            id: id.into(),
+            message: format!("Failed to cache transcription: {}", e),
+        });
     }
 
     create_transcription_result(id, &segments, &whisper_response, &p, temp_dir).await
 }
-
 
 fn is_digits(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
@@ -1315,7 +1507,9 @@ fn format_with_thousands(digits: String) -> String {
     let mut out = String::new();
     let mut cnt = 0;
     for ch in digits.chars().rev() {
-        if cnt > 0 && cnt % 3 == 0 { out.push(','); }
+        if cnt > 0 && cnt % 3 == 0 {
+            out.push(',');
+        }
         out.push(ch);
         cnt += 1;
     }
@@ -1327,7 +1521,7 @@ fn format_with_thousands(digits: String) -> String {
 /// Returns (text, start_ms, end_ms) tuples ready for CaptionSegment mapping.
 fn merge_numbers_and_currency(
     words: &[WhisperWord],
-    max_duration_ms: Option<u64>
+    max_duration_ms: Option<u64>,
 ) -> Vec<(String, u64, u64)> {
     let mut out = Vec::new();
     let mut i = 0usize;
@@ -1336,10 +1530,12 @@ fn merge_numbers_and_currency(
         let cur = words[i].word.trim();
         // FIX: words[i].start is already in seconds, convert to ms properly
         let start_ms = (words[i].start * 1000.0) as u64;
-        let mut end_ms   = (words[i].end   * 1000.0) as u64;
+        let mut end_ms = (words[i].end * 1000.0) as u64;
 
         if let Some(max_ms) = max_duration_ms {
-            if start_ms > max_ms { break; }
+            if start_ms > max_ms {
+                break;
+            }
             end_ms = end_ms.min(max_ms);
         }
 
@@ -1357,9 +1553,12 @@ fn merge_numbers_and_currency(
                     let t = words[j].word.trim();
                     if t.len() == 3 && is_digits(t) {
                         groups.push(t.to_string());
-                        end_ms = ((words[j].end * 1000.0) as u64).min(max_duration_ms.unwrap_or(u64::MAX));
+                        end_ms = ((words[j].end * 1000.0) as u64)
+                            .min(max_duration_ms.unwrap_or(u64::MAX));
                         j += 1;
-                    } else { break; }
+                    } else {
+                        break;
+                    }
                 }
 
                 // optional decimal part: "." + 1–2 digits
@@ -1369,7 +1568,8 @@ fn merge_numbers_and_currency(
                     && words[j + 1].word.trim().len() <= 2
                 {
                     let decimal = words[j + 1].word.trim();
-                    end_ms = ((words[j + 1].end * 1000.0) as u64).min(max_duration_ms.unwrap_or(u64::MAX));
+                    end_ms = ((words[j + 1].end * 1000.0) as u64)
+                        .min(max_duration_ms.unwrap_or(u64::MAX));
                     let merged = format!("${}.{}", format_with_thousands(groups.join("")), decimal);
                     out.push((merged, start_ms, end_ms));
                     i = j + 2;
@@ -1393,9 +1593,12 @@ fn merge_numbers_and_currency(
                 let t = words[j].word.trim();
                 if t.len() == 3 && is_digits(t) {
                     groups.push(t.to_string());
-                    end_ms = ((words[j].end * 1000.0) as u64).min(max_duration_ms.unwrap_or(u64::MAX));
+                    end_ms =
+                        ((words[j].end * 1000.0) as u64).min(max_duration_ms.unwrap_or(u64::MAX));
                     j += 1;
-                } else { break; }
+                } else {
+                    break;
+                }
             }
 
             // optional decimals
@@ -1405,7 +1608,8 @@ fn merge_numbers_and_currency(
                 && words[j + 1].word.trim().len() <= 2
             {
                 let decimal = words[j + 1].word.trim();
-                end_ms = ((words[j + 1].end * 1000.0) as u64).min(max_duration_ms.unwrap_or(u64::MAX));
+                end_ms =
+                    ((words[j + 1].end * 1000.0) as u64).min(max_duration_ms.unwrap_or(u64::MAX));
                 let merged = format!("{}.{}", format_with_thousands(groups.join("")), decimal);
                 out.push((merged, start_ms, end_ms));
                 i = j + 2;
@@ -1430,16 +1634,22 @@ fn merge_numbers_and_currency(
     out
 }
 
-pub fn whisper_to_caption_segments(response: &WhisperResponse, split_by_words: bool) -> Vec<CaptionSegment> {
+pub fn whisper_to_caption_segments(
+    response: &WhisperResponse,
+    split_by_words: bool,
+) -> Vec<CaptionSegment> {
     let max_duration_ms = response.duration.map(|d| (d * 1000.0) as u64);
 
     if split_by_words && response.words.is_some() {
         let words = response.words.as_ref().unwrap();
         let merged = merge_numbers_and_currency(words, max_duration_ms);
 
-        merged.into_iter()
+        merged
+            .into_iter()
             .filter_map(|(text, start_ms, end_ms)| {
-                if end_ms <= start_ms { return None; }
+                if end_ms <= start_ms {
+                    return None;
+                }
                 Some(CaptionSegment {
                     start_ms,
                     end_ms,
@@ -1528,12 +1738,13 @@ pub fn whisper_to_caption_segments(response: &WhisperResponse, split_by_words: b
         word_segments
     } else if let Some(segments) = &response.segments {
         // use segment-level timing, but try to populate words if available
-        segments.iter()
+        segments
+            .iter()
             .filter_map(|seg| {
                 let start_ms = (seg.start * 1000.0) as u64;
                 let end_ms = (seg.end * 1000.0) as u64;
 
-                                // skip segments that are beyond the actual audio duration
+                // skip segments that are beyond the actual audio duration
                 if let Some(max_ms) = max_duration_ms {
                     if start_ms > max_ms {
                         return None;
@@ -1554,13 +1765,15 @@ pub fn whisper_to_caption_segments(response: &WhisperResponse, split_by_words: b
 
                 // If we have word-level data globally, try to assign words to this segment
                 let segment_words = if let Some(all_words) = &response.words {
-                    all_words.iter()
+                    all_words
+                        .iter()
                         .filter(|w| {
-                             let w_start_ms = (w.start * 1000.0) as u64;
-                             let w_end_ms = (w.end * 1000.0) as u64;
-                             // Include words that mostly overlap with the segment or are contained within it
-                             // Simple containment check:
-                             w_start_ms >= start_ms && w_end_ms <= final_end_ms + 100 // +100ms tolerance
+                            let w_start_ms = (w.start * 1000.0) as u64;
+                            let w_end_ms = (w.end * 1000.0) as u64;
+                            // Include words that mostly overlap with the segment or are contained within it
+                            // Simple containment check:
+                            w_start_ms >= start_ms && w_end_ms <= final_end_ms + 100
+                            // +100ms tolerance
                         })
                         .map(|w| WordSpan {
                             start_ms: (w.start * 1000.0) as u64,
@@ -1597,8 +1810,10 @@ pub fn whisper_to_caption_segments(response: &WhisperResponse, split_by_words: b
     }
 }
 
-
-pub async fn get_cached_whisper_response(audio_path: &str, params: &TranscribeSegmentsParams) -> anyhow::Result<Option<WhisperResponse>> {
+pub async fn get_cached_whisper_response(
+    audio_path: &str,
+    params: &TranscribeSegmentsParams,
+) -> anyhow::Result<Option<WhisperResponse>> {
     let (audio_hash, params_hash) = compute_segments_cache_key(audio_path, params)?;
     let index = load_cache_index().await?;
 
@@ -1614,11 +1829,17 @@ pub async fn get_cached_whisper_response(audio_path: &str, params: &TranscribeSe
     Ok(None)
 }
 
-pub async fn save_cached_whisper_response(audio_path: &str, params: &TranscribeSegmentsParams, response: &WhisperResponse) -> anyhow::Result<()> {
+pub async fn save_cached_whisper_response(
+    audio_path: &str,
+    params: &TranscribeSegmentsParams,
+    response: &WhisperResponse,
+) -> anyhow::Result<()> {
     let (audio_hash, params_hash) = compute_segments_cache_key(audio_path, params)?;
     let mut index = load_cache_index().await?;
     let cache_dir = get_cache_dir()?;
-    let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
 
     // create cache filename and save JSON response
     let cache_filename = format!("{}_{}.json", &audio_hash[..8], &params_hash[..8]);
@@ -1635,7 +1856,9 @@ pub async fn save_cached_whisper_response(audio_path: &str, params: &TranscribeS
     };
 
     // remove old entry if exists
-    index.entries.retain(|e| !(e.audio_hash == new_entry.audio_hash && e.params_hash == new_entry.params_hash));
+    index.entries.retain(|e| {
+        !(e.audio_hash == new_entry.audio_hash && e.params_hash == new_entry.params_hash)
+    });
 
     // add new entry
     index.entries.push(new_entry);
@@ -1643,7 +1866,10 @@ pub async fn save_cached_whisper_response(audio_path: &str, params: &TranscribeS
     // keep only 4 most recent entries (LRU eviction)
     if index.entries.len() > 4 {
         index.entries.sort_by_key(|e| e.timestamp);
-        let to_remove = index.entries.drain(0..index.entries.len() - 4).collect::<Vec<_>>();
+        let to_remove = index
+            .entries
+            .drain(0..index.entries.len() - 4)
+            .collect::<Vec<_>>();
 
         // delete old cached files
         for entry in to_remove {
@@ -1655,8 +1881,10 @@ pub async fn save_cached_whisper_response(audio_path: &str, params: &TranscribeS
     Ok(())
 }
 
-
-pub fn compute_segments_cache_key(audio_path: &str, params: &TranscribeSegmentsParams) -> anyhow::Result<(String, String)> {
+pub fn compute_segments_cache_key(
+    audio_path: &str,
+    params: &TranscribeSegmentsParams,
+) -> anyhow::Result<(String, String)> {
     // hash audio file content
     let audio_bytes = std::fs::read(audio_path)?;
     let audio_hash = blake3::hash(&audio_bytes).to_hex().to_string();
@@ -1669,7 +1897,9 @@ pub fn compute_segments_cache_key(audio_path: &str, params: &TranscribeSegmentsP
         "prompt": params.prompt,
         "version": "v2_merged_tokens", // Invalidate cache for new merging logic
     });
-    let params_hash = blake3::hash(params_for_hash.to_string().as_bytes()).to_hex().to_string();
+    let params_hash = blake3::hash(params_for_hash.to_string().as_bytes())
+        .to_hex()
+        .to_string();
 
     Ok((audio_hash, params_hash))
 }
@@ -1688,9 +1918,13 @@ pub async fn load_cache_index() -> anyhow::Result<WhisperCacheIndex> {
 
     if index_path.exists() {
         let content = fs::read_to_string(index_path).await?;
-        Ok(serde_json::from_str(&content).unwrap_or(WhisperCacheIndex { entries: Vec::new() }))
+        Ok(serde_json::from_str(&content).unwrap_or(WhisperCacheIndex {
+            entries: Vec::new(),
+        }))
     } else {
-        Ok(WhisperCacheIndex { entries: Vec::new() })
+        Ok(WhisperCacheIndex {
+            entries: Vec::new(),
+        })
     }
 }
 
