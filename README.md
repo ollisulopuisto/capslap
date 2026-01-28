@@ -68,11 +68,15 @@ mkdir -p rust/models
 curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin \
   -o rust/models/ggml-tiny.bin
 
-# Base model (recommended, 142 MB)
+# Large v3 Turbo ⭐ RECOMMENDED (best speed/accuracy balance, 809 MB)
+curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin \
+  -o rust/models/ggml-large-v3-turbo.bin
+
+# Base model (lightweight, 142 MB)
 curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin \
   -o rust/models/ggml-base.bin
 
-# Small model (better accuracy, 466 MB)
+# Small model (466 MB)
 curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin \
   -o rust/models/ggml-small.bin
 ```
