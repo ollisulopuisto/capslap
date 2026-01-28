@@ -473,10 +473,7 @@ pub async fn is_ffmpeg_whisper_available() -> bool {
 /// Check if whisper.cpp CLI is available (preferred method)
 pub async fn is_whisper_cpp_available() -> bool {
     // Use the new cross-platform whisper binary detection from whisper.rs
-    match crate::whisper::find_whisper_binary().await {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    crate::whisper::find_whisper_binary().await.is_ok()
 }
 
 /// Check if FFmpeg has libass support for subtitles
@@ -1018,8 +1015,8 @@ pub async fn export_video(
             // Debug log for checking what we get (temporary, can be verbose)
             // emit(RpcEvent::Log { id: id.into(), message: format!("FFmpeg stdout: {}", line) });
 
-            if line.starts_with("out_time_us=") {
-                if let Ok(us) = line["out_time_us=".len()..].trim().parse::<u64>() {
+            if let Some(stripped) = line.strip_prefix("out_time_us=") {
+                if let Ok(us) = stripped.trim().parse::<u64>() {
                     let progress = if let Some(total) = duration_us {
                         if total > 0 {
                             (us as f64 / total as f64).min(0.99) as f32
@@ -1117,8 +1114,8 @@ pub async fn export_video(
             let reader = tokio::io::BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if line.starts_with("out_time_us=") {
-                    if let Ok(us) = line["out_time_us=".len()..].trim().parse::<u64>() {
+                if let Some(stripped) = line.strip_prefix("out_time_us=") {
+                    if let Ok(us) = stripped.trim().parse::<u64>() {
                         let progress = if let Some(total) = duration_us {
                             if total > 0 {
                                 (us as f64 / total as f64).min(0.99) as f32

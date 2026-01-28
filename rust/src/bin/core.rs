@@ -1,9 +1,11 @@
-use core::rpc::{RpcRequest, RpcResponse, RpcError, RpcEvent, new_id};
 use core::captions;
+use core::rpc::{new_id, RpcError, RpcEvent, RpcRequest, RpcResponse};
 use std::io::{self, BufRead, Write};
 
 // Shared cancellation map: request_id -> cancellation_sender
-type CancelMap = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, tokio::sync::broadcast::Sender<()>>>>;
+type CancelMap = std::sync::Arc<
+    std::sync::Mutex<std::collections::HashMap<String, tokio::sync::broadcast::Sender<()>>>,
+>;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -16,30 +18,35 @@ async fn main() -> anyhow::Result<()> {
                 None => "Box<Any>",
             },
         };
-        let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "unknown".to_string());
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown".to_string());
         let log_path = "/tmp/capslap-panic.log";
         let _ = std::fs::write(log_path, format!("Panic occurred at {}: {}", location, msg));
     }));
 
     let stdin = io::stdin();
     let mut tasks = tokio::task::JoinSet::new();
-    let cancel_map: CancelMap = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let cancel_map: CancelMap =
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
     for line in stdin.lock().lines() {
         let line = line?;
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
 
         let req: Result<RpcRequest, _> = serde_json::from_str(&line);
         match req {
             Ok(r) => {
                 let cancel_map = cancel_map.clone();
                 // Spawn each request as a concurrent task
-                tasks.spawn(async move {
-                    handle_request(r, cancel_map).await
-                });
+                tasks.spawn(async move { handle_request(r, cancel_map).await });
             }
             Err(e) => {
-                let err = serde_json::json!({ "id": new_id(), "error": format!("Bad request: {}", e) });
+                let err =
+                    serde_json::json!({ "id": new_id(), "error": format!("Bad request: {}", e) });
                 println!("{}", err);
                 let _ = io::stdout().flush();
             }
@@ -47,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Wait for all tasks to complete (though this won't be reached in normal operation)
-    while let Some(_) = tasks.join_next().await {}
+    while tasks.join_next().await.is_some() {}
     Ok(())
 }
 
@@ -61,13 +68,19 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
     };
 
     let write_ok = |value: serde_json::Value| {
-        let resp = RpcResponse { id: id.clone(), result: value };
+        let resp = RpcResponse {
+            id: id.clone(),
+            result: value,
+        };
         println!("{}", serde_json::to_string(&resp).unwrap());
         let _ = io::stdout().flush();
     };
 
     let write_err = |e: String| {
-        let err = RpcError { id: id.clone(), error: e };
+        let err = RpcError {
+            id: id.clone(),
+            error: e,
+        };
         println!("{}", serde_json::to_string(&err).unwrap());
         let _ = io::stdout().flush();
     };
@@ -78,7 +91,7 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
         let mut map = cancel_map.lock().unwrap();
         map.insert(id.clone(), tx);
     }
-    
+
     // Ensure cleanup of cancellation token on drop
     struct CleanupGuard {
         id: String,
@@ -90,20 +103,23 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
             map.remove(&self.id);
         }
     }
-    let _guard = CleanupGuard { id: id.clone(), map: cancel_map.clone() };
+    let _guard = CleanupGuard {
+        id: id.clone(),
+        map: cancel_map.clone(),
+    };
 
     match r.method.as_str() {
         "ping" => write_ok(serde_json::json!({"ok": true})),
         "cancel" => {
             // New cancel method
             if let Some(target_id) = r.params.as_str() {
-                 let map = cancel_map.lock().unwrap();
-                 if let Some(tx) = map.get(target_id) {
-                     let _ = tx.send(()); // Send cancellation signal
-                     write_ok(serde_json::json!({ "cancelled": true }));
-                 } else {
-                     write_err(format!("Task with id {} not found", target_id));
-                 }
+                let map = cancel_map.lock().unwrap();
+                if let Some(tx) = map.get(target_id) {
+                    let _ = tx.send(()); // Send cancellation signal
+                    write_ok(serde_json::json!({ "cancelled": true }));
+                } else {
+                    write_err(format!("Task with id {} not found", target_id));
+                }
             } else {
                 write_err("Invalid params for cancel, expected string id".to_string());
             }
@@ -122,41 +138,44 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                             write_err("Cancelled".to_string());
                         }
                     }
-                },
+                }
                 Err(e) => write_err(format!("Invalid params for generateCaptions: {}", e)),
             }
         }
         "downloadModel" => {
             match serde_json::from_value::<core::types::DownloadModelParams>(r.params) {
                 Ok(p) => {
-                     tokio::select! {
-                        res = core::whisper::download_model_rpc(&id, p, &mut emit) => {
-                             match res {
-                                Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
-                                Err(e) => write_err(e.to_string()),
-                            }
-                        }
-                        _ = rx.recv() => {
-                             write_err("Cancelled".to_string());
-                        }
-                     }
-                },
+                    tokio::select! {
+                       res = core::whisper::download_model_rpc(&id, p, &mut emit) => {
+                            match res {
+                               Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
+                               Err(e) => write_err(e.to_string()),
+                           }
+                       }
+                       _ = rx.recv() => {
+                            write_err("Cancelled".to_string());
+                       }
+                    }
+                }
                 Err(e) => write_err(format!("Invalid params for downloadModel: {}", e)),
             }
         }
-        "checkModelExists" => {
-            match serde_json::from_value::<String>(r.params) {
-                Ok(model_name) => match core::whisper::check_model_exists(&model_name) {
-                    Ok(exists) => write_ok(serde_json::to_value(exists).unwrap()),
-                    Err(e) => write_err(e.to_string()),
-                },
-                Err(e) => write_err(format!("Invalid params for checkModelExists: {}", e)),
-            }
-        }
+        "checkModelExists" => match serde_json::from_value::<String>(r.params) {
+            Ok(model_name) => match core::whisper::check_model_exists(&model_name) {
+                Ok(exists) => write_ok(serde_json::to_value(exists).unwrap()),
+                Err(e) => write_err(e.to_string()),
+            },
+            Err(e) => write_err(format!("Invalid params for checkModelExists: {}", e)),
+        },
         "extractFirstFrame" => {
             match serde_json::from_value::<core::types::ExtractFirstFrameParams>(r.params) {
                 Ok(p) => match core::video::extract_first_frame(&p.video_path) {
-                    Ok(base64_img) => write_ok(serde_json::to_value(core::types::ExtractFirstFrameResult { image_data: base64_img }).unwrap()),
+                    Ok(base64_img) => write_ok(
+                        serde_json::to_value(core::types::ExtractFirstFrameResult {
+                            image_data: base64_img,
+                        })
+                        .unwrap(),
+                    ),
                     Err(e) => write_err(e.to_string()),
                 },
                 Err(e) => write_err(format!("Invalid params for extractFirstFrame: {}", e)),
@@ -191,28 +210,26 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                             write_err("Cancelled".to_string());
                         }
                     }
-                },
+                }
                 Err(e) => write_err(format!("Invalid params for transcribe: {}", e)),
             }
         }
-        "burn" => {
-            match serde_json::from_value::<core::types::BurnCaptionsParams>(r.params) {
-                Ok(p) => {
-                    tokio::select! {
-                        res = captions::burn_captions_with_segments(&id, p, &mut emit) => {
-                            match res {
-                                Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
-                                Err(e) => write_err(e.to_string()),
-                            }
-                        }
-                        _ = rx.recv() => {
-                            write_err("Cancelled".to_string());
+        "burn" => match serde_json::from_value::<core::types::BurnCaptionsParams>(r.params) {
+            Ok(p) => {
+                tokio::select! {
+                    res = captions::burn_captions_with_segments(&id, p, &mut emit) => {
+                        match res {
+                            Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
+                            Err(e) => write_err(e.to_string()),
                         }
                     }
-                },
-                Err(e) => write_err(format!("Invalid params for burn: {}", e)),
+                    _ = rx.recv() => {
+                        write_err("Cancelled".to_string());
+                    }
+                }
             }
-        }
+            Err(e) => write_err(format!("Invalid params for burn: {}", e)),
+        },
         "previewLayout" => {
             match serde_json::from_value::<core::types::PreviewLayoutParams>(r.params) {
                 Ok(p) => match captions::generate_preview_layout(p) {
@@ -250,6 +267,5 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
             }
         }
         _ => write_err(format!("Unknown method: {}", r.method)),
-
     }
 }

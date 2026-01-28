@@ -8,7 +8,7 @@ use crate::video::probe;
 use crate::{audio, whisper};
 use anyhow::{anyhow, Result};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::{fs, path::PathBuf};
+use std::fs;
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command as TokioCommand;
 use tokio::sync::mpsc;
@@ -19,6 +19,7 @@ enum InternalUpdate {
     Event(RpcEvent),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn extract_and_transcribe(
     id: &str,
     input_video: &str,
@@ -579,13 +580,14 @@ mod tests_persistence {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn optimized_multi_format_encode(
     id: &str,
     input_video: &str,
     segments: &[CaptionSegment],
     export_formats: &[String],
     probe_result: &crate::video::ProbeResult,
-    temp_dir: &PathBuf,
+    temp_dir: &std::path::Path,
     font_name: Option<String>,
     font_size: Option<u32>,
     text_color: Option<String>,
@@ -834,10 +836,11 @@ async fn optimized_multi_format_encode(
 }
 
 /// Optimized single format encoding with hardware acceleration and modern FFmpeg flags
+#[allow(clippy::too_many_arguments)]
 async fn optimized_single_format_encode(
     id: &str,
     input_video: &str,
-    ass_path: &PathBuf,
+    ass_path: &std::path::Path,
     output_path: &str,
     target_w: u32,
     target_h: u32,
@@ -887,10 +890,11 @@ async fn optimized_single_format_encode(
 }
 
 /// Helper function to try encoding with a specific encoder
+#[allow(clippy::too_many_arguments)]
 async fn try_encode_with_encoder(
     id: &str,
     input_video: &str,
-    ass_path: &PathBuf,
+    ass_path: &std::path::Path,
     output_path: &str,
     target_w: u32,
     target_h: u32,
@@ -1004,7 +1008,7 @@ async fn try_encode_with_encoder(
         }
 
         args.push("-c:a");
-        args.push(&audio_codec);
+        args.push(audio_codec);
 
         // Add audio-specific args
         args.extend(audio_args.iter().copied());
@@ -1039,8 +1043,8 @@ async fn try_encode_with_encoder(
         let mut lines = reader.lines();
 
         while let Ok(Some(line)) = lines.next_line().await {
-            if line.starts_with("out_time_us=") {
-                if let Ok(us) = line["out_time_us=".len()..].trim().parse::<u64>() {
+            if let Some(stripped) = line.strip_prefix("out_time_us=") {
+                if let Ok(us) = stripped.trim().parse::<u64>() {
                     let progress = if let Some(total) = duration_us {
                         if total > 0 {
                             (us as f64 / total as f64).min(0.99) as f32
@@ -1099,6 +1103,7 @@ const HL_MIN_GAP_MS: u64 = 1200; // min time between highlights
 const HL_MAX_RATIO: f32 = 0.35; // cap ~35% of phrases highlighted
 const HL_RECENT_WINDOW_MS: u64 = 5000; // window for repetition penalty
 
+#[allow(clippy::too_many_arguments)]
 fn push_glow_and_stroke(
     lines: &mut String,
     start: &str,
@@ -1471,8 +1476,7 @@ struct AssStyle {
 fn _pct_to_margin_v(frame_h: u32, y_pct_from_top: f32) -> u32 {
     // bottom-aligned: margin_v measured from bottom
     let y = (frame_h as f32 * (y_pct_from_top / 100.0)).round() as i32;
-    let margin_from_bottom = (frame_h as i32 - y).max(0) as u32;
-    margin_from_bottom
+    (frame_h as i32 - y).max(0) as u32
 }
 
 fn stopwords() -> &'static HashSet<&'static str> {
@@ -2091,6 +2095,7 @@ fn calculate_proportional_font_size(
 /// Uses 9:16 format as reference to maintain consistent caption size across all formats
 /// Accepts optional color parameters - if None, uses defaults (white text, black outline, yellow highlight)
 /// Position parameter controls vertical alignment: "bottom" (default) or "center"
+#[allow(clippy::too_many_arguments)]
 fn default_ass_style(
     frame_w: u32,
     frame_h: u32,
@@ -2288,11 +2293,9 @@ fn assemble_multiline(
         if line_len > 0 && line_len + t_len + 1 > max_chars_per_line {
             s.push_str(r"\N");
             line_len = 0;
-        } else if line_len > 0 {
-            if !prev_ended_with_hyphen {
-                s.push(' ');
-                line_len += 1;
-            }
+        } else if line_len > 0 && !prev_ended_with_hyphen {
+            s.push(' ');
+            line_len += 1;
         }
 
         // Color logic

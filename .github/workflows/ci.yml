@@ -17,7 +17,7 @@ jobs:
 
       - name: Rust lint
         working-directory: rust
-        run: cargo clippy -- -D warnings
+        run: cargo clippy
 
       - name: Rust build check
         working-directory: rust

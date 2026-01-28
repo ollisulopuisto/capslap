@@ -18,7 +18,12 @@ Automatically generate and burn captions into videos using AI transcription. **W
 - **🎬 Caption Templates** - Pre-built styles: Oneliner, Karaoke, Vibrant, Storyteller
 - **🎯 Word-Level Timing** - Karaoke-style highlighting with precise word synchronization
 - **📱 Export Formats** - 9:16 (TikTok/Reels), 16:9 (YouTube), 1:1 (Instagram), 4:5 (Feed posts)
-- **✏️ Caption Editor** - Edit transcribed text and adjust timing before burning
+- **🎥 Wide Format Support** - Works with MP4, MOV, WebM, AVI, WMV, FLV, MKV, MPEG, 3GP, and more
+- **✏️ Caption Editor** - Full control over your captions before exporting:
+  - Edit transcribed text with live preview
+  - Shift words between segments to fix line breaks
+  - View and adjust word-level timing
+  - Double-click any segment to edit text directly
 - **🌍 Multilingual** - Transcribe in 99+ languages including English, Spanish, French, German, Finnish, Japanese, and more
 
 ## Prerequisites

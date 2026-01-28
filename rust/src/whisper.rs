@@ -1514,13 +1514,11 @@ fn is_digits(s: &str) -> bool {
 fn format_with_thousands(digits: String) -> String {
     // insert commas every 3 from right
     let mut out = String::new();
-    let mut cnt = 0;
-    for ch in digits.chars().rev() {
+    for (cnt, ch) in digits.chars().rev().enumerate() {
         if cnt > 0 && cnt % 3 == 0 {
             out.push(',');
         }
         out.push(ch);
-        cnt += 1;
     }
     out.chars().rev().collect()
 }
@@ -1649,103 +1647,109 @@ pub fn whisper_to_caption_segments(
 ) -> Vec<CaptionSegment> {
     let max_duration_ms = response.duration.map(|d| (d * 1000.0) as u64);
 
-    if split_by_words && response.words.is_some() {
-        let words = response.words.as_ref().unwrap();
-        let merged = merge_numbers_and_currency(words, max_duration_ms);
+    if let Some(words) = &response.words {
+        if split_by_words {
+            let merged = merge_numbers_and_currency(words, max_duration_ms);
 
-        merged
-            .into_iter()
-            .filter_map(|(text, start_ms, end_ms)| {
-                if end_ms <= start_ms {
-                    return None;
-                }
-                Some(CaptionSegment {
-                    start_ms,
-                    end_ms,
-                    text: text.clone(),
-                    words: vec![WordSpan {
+            return merged
+                .into_iter()
+                .filter_map(|(text, start_ms, end_ms)| {
+                    if end_ms <= start_ms {
+                        return None;
+                    }
+                    Some(CaptionSegment {
                         start_ms,
                         end_ms,
-                        text,
-                    }],
+                        text: text.clone(),
+                        words: vec![WordSpan {
+                            start_ms,
+                            end_ms,
+                            text,
+                        }],
+                    })
                 })
-            })
-            .collect()
-    } else if split_by_words && response.segments.is_some() {
-        // Auto-split segments into words when word-level timestamps are not available
-        let segments = response.segments.as_ref().unwrap();
-        let mut word_segments = Vec::new();
+                .collect();
+        }
+    }
 
-        for seg in segments {
-            let start_ms = (seg.start * 1000.0) as u64;
-            let end_ms = (seg.end * 1000.0) as u64;
-            let segment_duration_ms = end_ms.saturating_sub(start_ms);
+    if split_by_words {
+        if let Some(segments) = &response.segments {
+            // Auto-split segments into words when word-level timestamps are not available
+            let mut word_segments = Vec::new();
 
-            // Skip segments that are beyond the actual audio duration
-            if let Some(max_ms) = max_duration_ms {
-                if start_ms > max_ms {
-                    continue;
+            for seg in segments {
+                let start_ms = (seg.start * 1000.0) as u64;
+                let end_ms = (seg.end * 1000.0) as u64;
+                let segment_duration_ms = end_ms.saturating_sub(start_ms);
+
+                // Skip segments that are beyond the actual audio duration
+                if let Some(max_ms) = max_duration_ms {
+                    if start_ms > max_ms {
+                        continue;
+                    }
                 }
-            }
 
-            let final_end_ms = if let Some(max_ms) = max_duration_ms {
-                end_ms.min(max_ms)
-            } else {
-                end_ms
-            };
-
-            // Split text into words
-            let words: Vec<&str> = seg.text.split_whitespace().collect();
-            if words.is_empty() {
-                continue;
-            }
-
-            // Distribute time based on word length (better than linear distribution)
-            let word_lengths: Vec<usize> = words.iter().map(|w| w.len()).collect();
-            let total_chars: usize = word_lengths.iter().sum();
-            let base_time = segment_duration_ms as f64;
-
-            let mut cumulative_time = 0.0;
-            for (i, word) in words.iter().enumerate() {
-                let word_start_ms = start_ms + cumulative_time as u64;
-
-                // Allocate time based on word length ratio with minimum duration
-                let char_ratio = if total_chars > 0 {
-                    word_lengths[i] as f64 / total_chars as f64
+                let final_end_ms = if let Some(max_ms) = max_duration_ms {
+                    end_ms.min(max_ms)
                 } else {
-                    1.0 / words.len() as f64 // Fallback to equal distribution
+                    end_ms
                 };
 
-                // Ensure minimum 100ms per word, but don't exceed segment duration
-                let word_duration = (base_time * char_ratio).max(100.0);
-                cumulative_time += word_duration;
-
-                let word_end_ms = if i == words.len() - 1 {
-                    final_end_ms // Last word gets remaining time
-                } else {
-                    (word_start_ms as f64 + word_duration).min(final_end_ms as f64) as u64
-                };
-
-                if word_end_ms <= word_start_ms {
+                // Split text into words
+                let words: Vec<&str> = seg.text.split_whitespace().collect();
+                if words.is_empty() {
                     continue;
                 }
 
-                let word_text = word.to_string();
-                word_segments.push(CaptionSegment {
-                    start_ms: word_start_ms,
-                    end_ms: word_end_ms,
-                    text: word_text.clone(),
-                    words: vec![WordSpan {
+                // Distribute time based on word length (better than linear distribution)
+                let word_lengths: Vec<usize> = words.iter().map(|w| w.len()).collect();
+                let total_chars: usize = word_lengths.iter().sum();
+                let base_time = segment_duration_ms as f64;
+
+                let mut cumulative_time = 0.0;
+                for (i, word) in words.iter().enumerate() {
+                    let word_start_ms = start_ms + cumulative_time as u64;
+
+                    // Allocate time based on word length ratio with minimum duration
+                    let char_ratio = if total_chars > 0 {
+                        word_lengths[i] as f64 / total_chars as f64
+                    } else {
+                        1.0 / words.len() as f64 // Fallback to equal distribution
+                    };
+
+                    // Ensure minimum 100ms per word, but don't exceed segment duration
+                    let word_duration = (base_time * char_ratio).max(100.0);
+                    cumulative_time += word_duration;
+
+                    let word_end_ms = if i == words.len() - 1 {
+                        final_end_ms // Last word gets remaining time
+                    } else {
+                        (word_start_ms as f64 + word_duration).min(final_end_ms as f64) as u64
+                    };
+
+                    if word_end_ms <= word_start_ms {
+                        continue;
+                    }
+
+                    let word_text = word.to_string();
+                    word_segments.push(CaptionSegment {
                         start_ms: word_start_ms,
                         end_ms: word_end_ms,
-                        text: word_text,
-                    }],
-                });
+                        text: word_text.clone(),
+                        words: vec![WordSpan {
+                            start_ms: word_start_ms,
+                            end_ms: word_end_ms,
+                            text: word_text,
+                        }],
+                    });
+                }
             }
-        }
 
-        word_segments
-    } else if let Some(segments) = &response.segments {
+            return word_segments;
+        }
+    }
+
+    if let Some(segments) = &response.segments {
         // use segment-level timing, but try to populate words if available
         segments
             .iter()
@@ -1827,12 +1831,13 @@ pub async fn get_cached_whisper_response(
     let index = load_cache_index().await?;
 
     for entry in &index.entries {
-        if entry.audio_hash == audio_hash && entry.params_hash == params_hash {
-            if std::path::Path::new(&entry.response_path).exists() {
-                let content = fs::read_to_string(&entry.response_path).await?;
-                let response: WhisperResponse = serde_json::from_str(&content)?;
-                return Ok(Some(response));
-            }
+        if entry.audio_hash == audio_hash
+            && entry.params_hash == params_hash
+            && std::path::Path::new(&entry.response_path).exists()
+        {
+            let content = fs::read_to_string(&entry.response_path).await?;
+            let response: WhisperResponse = serde_json::from_str(&content)?;
+            return Ok(Some(response));
         }
     }
     Ok(None)
