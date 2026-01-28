@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Rust lint
+        working-directory: rust
+        run: cargo clippy -- -D warnings
+
+      - name: Rust build check
+        working-directory: rust
+        run: cargo build --release
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install Electron dependencies
+        working-directory: electron
+        run: bun install --frozen-lockfile
+
+      - name: Lint Electron app
+        working-directory: electron
+        run: bun run lint
+
+      - name: TypeScript check
+        working-directory: electron
+        run: bunx tsc --noEmit

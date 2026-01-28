@@ -25,6 +25,11 @@ extraResources:
     to: "bin-win"
     filter:
       - "**/*"
+  # Linux binaries
+  - from: "../rust/bin-linux/"
+    to: "bin-linux"
+    filter:
+      - "**/*"
 win:
   executableName: CapSlap
   target:
@@ -71,5 +76,6 @@ linux:
 appImage:
   artifactName: CapSlap-${version}-linux.${ext}
 npmRebuild: false
-# Отключаем автопубликацию для локальной сборки
-publish: null
+publish:
+  provider: github
+  releaseType: release

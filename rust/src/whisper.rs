@@ -343,10 +343,15 @@ fn get_bundled_whisper_paths(exe_dir: &std::path::Path) -> Vec<PathBuf> {
 
     #[cfg(target_os = "linux")]
     {
+        // Check bin-linux directory for Linux-specific binaries (from electron-builder)
+        paths.push(exe_dir.join("bin-linux/whisper-cli"));
+        paths.push(exe_dir.join("bin-linux/whisper"));
         if cfg!(target_arch = "x86_64") {
+            paths.push(exe_dir.join("bin-linux/whisper-linux-x64"));
             paths.push(exe_dir.join("bin/whisper-linux-x64")); // Check bin subdirectory first
             paths.push(exe_dir.join("whisper-linux-x64"));
         } else if cfg!(target_arch = "aarch64") {
+            paths.push(exe_dir.join("bin-linux/whisper-linux-arm64"));
             paths.push(exe_dir.join("bin/whisper-linux-arm64")); // Check bin subdirectory first
             paths.push(exe_dir.join("whisper-linux-arm64"));
         }
@@ -516,6 +521,8 @@ fn get_bundled_ffmpeg_paths(exe_dir: &std::path::Path) -> Vec<PathBuf> {
 
     #[cfg(target_os = "linux")]
     {
+        // Check bin-linux directory for Linux-specific binaries (from electron-builder)
+        paths.push(exe_dir.join("bin-linux/ffmpeg"));
         paths.push(exe_dir.join("bin/ffmpeg")); // Check bin subdirectory first
         paths.push(exe_dir.join("ffmpeg"));
     }
@@ -577,6 +584,8 @@ fn get_bundled_ffprobe_paths(exe_dir: &std::path::Path) -> Vec<PathBuf> {
 
     #[cfg(target_os = "linux")]
     {
+        // Check bin-linux directory for Linux-specific binaries (from electron-builder)
+        paths.push(exe_dir.join("bin-linux/ffprobe"));
         paths.push(exe_dir.join("bin/ffprobe")); // Check bin subdirectory first
         paths.push(exe_dir.join("ffprobe"));
     }
