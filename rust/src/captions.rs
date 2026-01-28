@@ -1,12 +1,16 @@
-use anyhow::{anyhow, Result};
 use crate::rpc::RpcEvent;
-use crate::types::{CaptionSegment, WordSpan, GenerateCaptionsParams, GenerateCaptionsResult, CaptionedVideoResult, ExtractAudioParams, TranscribeSegmentsParams, TranscribeSegmentsResult, BurnCaptionsParams, SaveCaptionsParams, LoadCaptionsParams, LoadCaptionsResult};
+use crate::types::{
+    BurnCaptionsParams, CaptionSegment, CaptionedVideoResult, ExtractAudioParams,
+    GenerateCaptionsParams, GenerateCaptionsResult, LoadCaptionsParams, LoadCaptionsResult,
+    SaveCaptionsParams, TranscribeSegmentsParams, TranscribeSegmentsResult, WordSpan,
+};
 use crate::video::probe;
 use crate::{audio, whisper};
-use std::{fs, path::PathBuf};
+use anyhow::{anyhow, Result};
 use std::collections::{HashMap, HashSet, VecDeque};
-use tokio::process::Command as TokioCommand;
+use std::{fs, path::PathBuf};
 use tokio::io::AsyncBufReadExt;
+use tokio::process::Command as TokioCommand;
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
@@ -50,7 +54,9 @@ pub async fn extract_and_transcribe(
         prompt,
         video_file: Some(input_video.to_string()),
     };
-    let transcription = whisper::transcribe_segments_with_temp(id, transcribe_params, Some(&temp_dir), &mut emit).await?;
+    let transcription =
+        whisper::transcribe_segments_with_temp(id, transcribe_params, Some(&temp_dir), &mut emit)
+            .await?;
 
     Ok((probe_result, audio_result.audio, transcription))
 }
@@ -58,16 +64,16 @@ pub async fn extract_and_transcribe(
 pub async fn burn_captions_with_segments(
     id: &str,
     params: BurnCaptionsParams,
-    mut emit: impl FnMut(RpcEvent)
+    mut emit: impl FnMut(RpcEvent),
 ) -> Result<Vec<CaptionedVideoResult>> {
     let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         return Err(anyhow!("Failed to create temp directory: {}", e));
     }
-    
+
     // We need to re-probe to get video dimensions
     let probe_result = probe(id, &params.input_video, &mut emit).await?;
-    
+
     optimized_multi_format_encode(
         id,
         &params.input_video,
@@ -85,14 +91,15 @@ pub async fn burn_captions_with_segments(
         params.position,
         params.output_size,
         params.crop_strategy,
-        &mut emit
-    ).await
+        &mut emit,
+    )
+    .await
 }
 
 pub async fn generate_captions(
     id: &str,
     params: GenerateCaptionsParams,
-    emit: impl FnMut(RpcEvent)
+    emit: impl FnMut(RpcEvent),
 ) -> Result<GenerateCaptionsResult> {
     generate_captions_single_pass(id, params, emit).await
 }
@@ -100,9 +107,8 @@ pub async fn generate_captions(
 pub async fn generate_captions_single_pass(
     id: &str,
     params: GenerateCaptionsParams,
-    mut emit: impl FnMut(RpcEvent)
+    mut emit: impl FnMut(RpcEvent),
 ) -> Result<GenerateCaptionsResult> {
-    
     let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
     let (probe_result, audio_file, transcription) = extract_and_transcribe(
         id,
@@ -112,8 +118,9 @@ pub async fn generate_captions_single_pass(
         params.language,
         params.api_key,
         params.prompt,
-        &mut emit
-    ).await?;
+        &mut emit,
+    )
+    .await?;
 
     let captioned_videos = optimized_multi_format_encode(
         id,
@@ -132,8 +139,9 @@ pub async fn generate_captions_single_pass(
         params.position,
         params.output_size,
         params.crop_strategy,
-        &mut emit
-    ).await?;
+        &mut emit,
+    )
+    .await?;
 
     Ok(GenerateCaptionsResult {
         probe_result,
@@ -144,22 +152,23 @@ pub async fn generate_captions_single_pass(
 }
 
 pub fn generate_preview_layout(
-    params: crate::types::PreviewLayoutParams
+    params: crate::types::PreviewLayoutParams,
 ) -> Result<crate::types::PreviewLayoutResult> {
     let style = default_ass_style(
-        params.width, params.height,
+        params.width,
+        params.height,
         params.font_name.as_deref(),
         params.text_color.as_deref(),
         params.highlight_word_color.as_deref(),
         params.outline_color.as_deref(),
         params.glow_effect,
-        params.position.as_deref()
+        params.position.as_deref(),
     );
 
     let mut cues = Vec::new();
-    
+
     // Determine Y position as percentage for frontend
-    // In ASS, we calculated margin_v. 
+    // In ASS, we calculated margin_v.
     // If align is 5 (center), y_pct is 50.
     // If align is 2 (bottom), y_pct is (100 - margin_pct).
     // Let's reconstruct consistent pct from style.
@@ -171,20 +180,20 @@ pub fn generate_preview_layout(
         // so pct = (margin_v / frame_h) * 100
         let margin_pct = (style.margin_v as f32 / params.height as f32) * 100.0;
         match style.align {
-             8 => margin_pct, // Top aligned, margin from top
-             _ => 100.0 - margin_pct, // Bottom aligned (2), margin from bottom
+            8 => margin_pct,         // Top aligned, margin from top
+            _ => 100.0 - margin_pct, // Bottom aligned (2), margin from bottom
         }
     };
 
     if params.karaoke {
         let phrases = coalesce_phrases(&params.segments);
-        // let white_bgr = bgr_from_aa_bgrr(&style.primary); 
+        // let white_bgr = bgr_from_aa_bgrr(&style.primary);
         // let hi_bgr    = bgr_from_aa_bgrr(&style.highlight);
-
 
         for ph in phrases {
             let tokens_upper = normalize_tokens(&ph.spans);
-            let segments = split_phrase_for_width(&tokens_upper, &ph.spans, params.width, style.font_size);
+            let segments =
+                split_phrase_for_width(&tokens_upper, &ph.spans, params.width, style.font_size);
 
             for (segment_tokens, segment_spans) in segments {
                 let windows = contiguous_cs_windows(&segment_spans);
@@ -192,23 +201,25 @@ pub fn generate_preview_layout(
                 for (i, (cs0, cs1)) in windows.iter().enumerate() {
                     let start_ms = (*cs0 as u64) * 10;
                     let end_ms = (*cs1 as u64) * 10;
-                    
+
                     // In karaoke, each window highlights one word (index i)
                     // The segment_tokens correspond to segment_spans.
                     // But wait, split_phrase_for_width returns tokens that match spans.
-                    
+
                     let mut preview_words = Vec::new();
                     for (w_idx, token) in segment_tokens.iter().enumerate() {
-                         preview_words.push(crate::types::PreviewWord {
-                             text: token.clone(),
-                             is_highlighted: w_idx == i,
-                         });
+                        preview_words.push(crate::types::PreviewWord {
+                            text: token.clone(),
+                            is_highlighted: w_idx == i,
+                        });
                     }
 
                     cues.push(crate::types::PreviewCue {
                         start_ms,
                         end_ms,
-                        lines: vec![crate::types::PreviewLine { words: preview_words }],
+                        lines: vec![crate::types::PreviewLine {
+                            words: preview_words,
+                        }],
                         y_pct,
                     });
                 }
@@ -230,9 +241,14 @@ pub fn generate_preview_layout(
             for (segment_tokens, segment_spans) in segments {
                 let segment_tokens_orig = original_tokens(&segment_spans);
                 let start_ms = segment_spans.first().unwrap().start_ms;
-                let end_ms   = segment_spans.last().unwrap().end_ms;
+                let end_ms = segment_spans.last().unwrap().end_ms;
 
-                let hi_opt = choose_highlight_idx(&segment_tokens_orig, &segment_spans, p_idx, &mut hl_state);
+                let hi_opt = choose_highlight_idx(
+                    &segment_tokens_orig,
+                    &segment_spans,
+                    p_idx,
+                    &mut hl_state,
+                );
                 let hi_idx = hi_opt.unwrap_or(usize::MAX);
 
                 // Reconstruct lines structure
@@ -242,49 +258,54 @@ pub fn generate_preview_layout(
                 // Let's check split_phrase_for_width... it seems to produce segments that fit in width.
                 // Wait, logic in build_ass_document call to assemble_colored_two_lines passed usize::MAX as break index.
                 // So split_phrase_for_width produces 1 line per segment.
-                
+
                 // For storyteller (split_phrase_multiline), it produces segments but we passed chunks.
                 // The chunk needs further wrapping?
                 // `assemble_multiline` does wrapping based on `max_chars_per_line`.
                 // We need to replicate `assemble_multiline` wrapping logic here to determine lines.
-                
-                let est_char_width = (style.font_size as f32 * 0.7).max(1.0);
-                
-                let lines_structure = if style.align == 5 {
-                     // Storyteller logic
-                     let max_chars = ((params.width as f32 * 0.85) / est_char_width).floor() as usize; 
-                     let total_chars: usize = segment_tokens.iter().map(|t| t.len()).sum();
-                     let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
-                     let min_chars = 25.min(max_chars).max(1);
-                     let wrapping_width = soft_target.clamp(min_chars, max_chars);
-                     
-                     // Perform wrapping
-                     let mut lines = Vec::new();
-                     let mut current_line_words = Vec::new();
-                     let mut line_len = 0;
 
-                     for (i, token) in segment_tokens.iter().enumerate() {
-                         let t_len = token.len(); // raw length
-                         // Note: assemble_multiline counts escaped length, we use raw here which is close enough or better
-                         
-                         if line_len > 0 && line_len + t_len + 1 > wrapping_width {
-                             lines.push(crate::types::PreviewLine { words: current_line_words });
-                             current_line_words = Vec::new();
-                             line_len = 0;
-                         } else if line_len > 0 {
-                             line_len += 1; // space
-                         }
-                         
-                         current_line_words.push(crate::types::PreviewWord {
-                             text: token.clone(),
-                             is_highlighted: i == hi_idx,
-                         });
-                         line_len += t_len;
-                     }
-                     if !current_line_words.is_empty() {
-                         lines.push(crate::types::PreviewLine { words: current_line_words });
-                     }
-                     lines
+                let est_char_width = (style.font_size as f32 * 0.7).max(1.0);
+
+                let lines_structure = if style.align == 5 {
+                    // Storyteller logic
+                    let max_chars =
+                        ((params.width as f32 * 0.85) / est_char_width).floor() as usize;
+                    let total_chars: usize = segment_tokens.iter().map(|t| t.len()).sum();
+                    let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
+                    let min_chars = 25.min(max_chars).max(1);
+                    let wrapping_width = soft_target.clamp(min_chars, max_chars);
+
+                    // Perform wrapping
+                    let mut lines = Vec::new();
+                    let mut current_line_words = Vec::new();
+                    let mut line_len = 0;
+
+                    for (i, token) in segment_tokens.iter().enumerate() {
+                        let t_len = token.len(); // raw length
+                                                 // Note: assemble_multiline counts escaped length, we use raw here which is close enough or better
+
+                        if line_len > 0 && line_len + t_len + 1 > wrapping_width {
+                            lines.push(crate::types::PreviewLine {
+                                words: current_line_words,
+                            });
+                            current_line_words = Vec::new();
+                            line_len = 0;
+                        } else if line_len > 0 {
+                            line_len += 1; // space
+                        }
+
+                        current_line_words.push(crate::types::PreviewWord {
+                            text: token.clone(),
+                            is_highlighted: i == hi_idx,
+                        });
+                        line_len += t_len;
+                    }
+                    if !current_line_words.is_empty() {
+                        lines.push(crate::types::PreviewLine {
+                            words: current_line_words,
+                        });
+                    }
+                    lines
                 } else {
                     // Standard logic (single line per segment usually)
                     let mut words = Vec::new();
@@ -314,80 +335,82 @@ pub fn save_captions(params: SaveCaptionsParams) -> Result<()> {
     let video_path = std::path::Path::new(&params.video_path);
     // Sidecar file: video.mp4 -> video.capslap.json
     // Let's sticker to replacing extension to keep it clean, OR append if we want to be safe against collisions (vid.mp4 vs vid.mov).
-    // The plan said: <video_path>.capslap.json. 
+    // The plan said: <video_path>.capslap.json.
     // If video is "movie.mp4", "movie.capslap.json" is fine.
     // But if I have "movie.mp4" and "movie.avi", they would clash.
     // Let's append ".capslap.json" to the full filename.
     let _json_path = video_path.with_extension("capslap.json"); // Kept variable but underscored to suppress warning if we don't use it, but wait, we use `json_path` (the other one) below.
-    // Actually the line 314 was unused because I shadowed it with line 321 `let json_path = ...`.
-    // So I should just remove line 314.
+                                                                // Actually the line 314 was unused because I shadowed it with line 321 `let json_path = ...`.
+                                                                // So I should just remove line 314.
 
-    
-    // If the video path didn't have an extension, with_extension replaces the last component? 
+    // If the video path didn't have an extension, with_extension replaces the last component?
     // No, it replaces extension. If video is /path/to/vid, it becomes /path/to/vid.capslap.json
     // If video is /path/to/vid.mp4, it becomes /path/to/vid.capslap.json.
     // Wait, if I want video.mp4.capslap.json, I should just append.
     // Let's stick to replacing extension to keep it clean, OR append if we want to be safe against collisions (vid.mp4 vs vid.mov).
-    // The plan said: <video_path>.capslap.json. 
+    // The plan said: <video_path>.capslap.json.
     // If video is "movie.mp4", "movie.capslap.json" is fine.
     // But if I have "movie.mp4" and "movie.avi", they would clash.
     // Let's append ".capslap.json" to the full filename.
     let json_path = format!("{}.capslap.json", params.video_path);
-    
+
     let json = serde_json::to_string_pretty(&params.segments)?;
     fs::write(&json_path, json)?;
-    
+
     Ok(())
 }
 
 pub fn load_captions(params: LoadCaptionsParams) -> Result<LoadCaptionsResult> {
     let json_path = format!("{}.capslap.json", params.video_path);
     let path = std::path::Path::new(&json_path);
-    
+
     if path.exists() {
         let content = fs::read_to_string(path)?;
         let segments: Vec<CaptionSegment> = serde_json::from_str(&content)?;
-        Ok(LoadCaptionsResult { segments: Some(segments) })
+        Ok(LoadCaptionsResult {
+            segments: Some(segments),
+        })
     } else {
         Ok(LoadCaptionsResult { segments: None })
     }
 }
 
 pub async fn generate_preview_frame(
-    params: crate::types::PreviewFrameParams
+    params: crate::types::PreviewFrameParams,
 ) -> Result<crate::types::PreviewFrameResult> {
     let temp_dir = std::env::temp_dir().join(format!("capslap_preview_{}", uuid::Uuid::new_v4()));
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         return Err(anyhow!("Failed to create temp directory: {}", e));
     }
-    
+
     // We need to probe to get video dimensions
     // We don't have an ID for logs here, so we use a placeholder
     let probe_id = "preview_probe";
     let probe_result = probe(probe_id, &params.input_video, |e| {
         // Ignore logs for preview
-        let _ = e; 
-    }).await?;
+        let _ = e;
+    })
+    .await?;
 
     // Determine target dimensions
     let target_ar = crate::video::parse_target_ar(&params.export_format)?;
     let src_w = probe_result.width.unwrap_or(1920) as u32;
     let src_h = probe_result.height.unwrap_or(1080) as u32;
-    
+
     let (target_w, target_h) = if let Some(size) = &params.output_size {
         match size.as_str() {
-             "1080p" => {
-                 let (base_w, base_h) = crate::video::ar_wh(target_ar);
-                 let ar = base_w as f64 / base_h as f64;
-                 if base_w > base_h {
-                     let w = (1080.0 * ar).round() as u32;
-                     (crate::video::round_even(w), 1080)
-                 } else {
-                     let h = (1080.0 / ar).round() as u32;
-                     (1080, crate::video::round_even(h))
-                 }
-             },
-             _ => crate::video::canvas_no_downscale(src_w, src_h, target_ar)
+            "1080p" => {
+                let (base_w, base_h) = crate::video::ar_wh(target_ar);
+                let ar = base_w as f64 / base_h as f64;
+                if base_w > base_h {
+                    let w = (1080.0 * ar).round() as u32;
+                    (crate::video::round_even(w), 1080)
+                } else {
+                    let h = (1080.0 / ar).round() as u32;
+                    (1080, crate::video::round_even(h))
+                }
+            }
+            _ => crate::video::canvas_no_downscale(src_w, src_h, target_ar),
         }
     } else {
         crate::video::canvas_no_downscale(src_w, src_h, target_ar)
@@ -397,68 +420,70 @@ pub async fn generate_preview_frame(
     let crop_strategy = params.crop_strategy.as_deref().unwrap_or("fit");
 
     // Build ASS file for valid segments
-    // Filter segments that overlap with timestamp ?? 
+    // Filter segments that overlap with timestamp ??
     // Actually, for a single frame preview, we usually want to see a specific segment.
     // But the caller might pass all segments.
-    // It's safer to pass all segments and let ASS renderer handle the timing, 
+    // It's safer to pass all segments and let ASS renderer handle the timing,
     // since we use timestamp to seek.
-    
+
     let style = default_ass_style(
-        target_w, target_h,
+        target_w,
+        target_h,
         params.font_name.as_deref(),
         params.text_color.as_deref(),
         params.highlight_word_color.as_deref(),
         params.outline_color.as_deref(),
         params.glow_effect,
-        params.position.as_deref()
+        params.position.as_deref(),
     );
-    
+
     let ass_doc = build_ass_document(
-        target_w, target_h, 
-        &style, 
-        &params.segments, 
-        params.karaoke, 
-        params.multiline, 
-        params.glow_effect
+        target_w,
+        target_h,
+        &style,
+        &params.segments,
+        params.karaoke,
+        params.multiline,
+        params.glow_effect,
     )?;
 
     let ass_path = temp_dir.join("preview.ass");
     fs::write(&ass_path, &ass_doc)?;
-    
+
     // Construct filter graph
     let ass_str = ass_path.to_string_lossy().to_string();
     let is_hdr = crate::video::is_hdr(&probe_result);
-    // Use software encoder logic for filter because we are extracting a PNG, 
+    // Use software encoder logic for filter because we are extracting a PNG,
     // and we don't need hardware encode for a single frame usually, or it complicates things.
     // `build_fitpad_filter_with_options` is what we want.
     let vf = crate::video::build_fitpad_filter_with_options(
-        target_w, 
-        target_h, 
-        Some(&ass_str), 
+        target_w,
+        target_h,
+        Some(&ass_str),
         crate::video::HardwareEncoder::Software, // Use software mode for compatibility
         crop_strategy,
-        is_hdr
+        is_hdr,
     );
-    
+
     // Extract frame using FFmpeg
     let ffmpeg_path = crate::video::get_ffmpeg_path_sync();
     let time_sec = params.timestamp_ms as f64 / 1000.0;
-    
+
     // -ss placed before -i is faster aka keyframe seek (but less accurate)
     // -ss placed after -i is slower (frame exact decoding) but more accurate.
-    // For preview we want accuracy so we seek after? 
+    // For preview we want accuracy so we seek after?
     // Actually, if we use -ss before -i, ffmpeg seeks to keyframe and then decodes to timestamp.
     // BUT since we are applying complex filters, we might need accurate decoding.
     // Let's use -ss before -i for speed, but add -copyts or re-adjustment?
     // Safer to put -ss after -i for exact frame if speed is acceptable (single frame).
-    
+
     // However, for complex filters, seeking might shift things.
     // Let's try standard seeking.
-    
+
     // Note: We need to ensure we output image format.
-    
+
     // Wait, if we use fitpad filter, it modifies timestamps/frames? No.
-    
+
     let output = TokioCommand::new(&ffmpeg_path)
         .arg("-ss")
         .arg(time_sec.to_string())
@@ -478,24 +503,23 @@ pub async fn generate_preview_frame(
         .map_err(|e| anyhow!("Failed to run ffmpeg: {}", e))?;
 
     if !output.status.success() {
-         let stderr = String::from_utf8_lossy(&output.stderr);
-         return Err(anyhow!("FFmpeg preview failed: {}", stderr));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("FFmpeg preview failed: {}", stderr));
     }
 
-    use base64::{Engine as _, engine::general_purpose};
+    use base64::{engine::general_purpose, Engine as _};
     let encoded = general_purpose::STANDARD.encode(&output.stdout);
     let data_uri = format!("data:image/png;base64,{}", encoded);
-    
+
     // Cleanup
     let _ = fs::remove_dir_all(temp_dir);
 
     Ok(crate::types::PreviewFrameResult {
-        image_data: data_uri
+        image_data: data_uri,
     })
 }
 
 #[cfg(test)]
-
 #[cfg(test)]
 #[cfg(test)]
 mod tests_persistence {
@@ -507,7 +531,7 @@ mod tests_persistence {
     fn test_save_and_load_captions() -> Result<()> {
         let video_file = NamedTempFile::new()?;
         let video_path = video_file.path().to_string_lossy().to_string();
-        
+
         let segments = vec![
             CaptionSegment {
                 start_ms: 1000,
@@ -520,38 +544,36 @@ mod tests_persistence {
                 end_ms: 3500,
                 text: "Testing save load".to_string(),
                 words: vec![],
-            }
+            },
         ];
-        
+
         // Save
         save_captions(SaveCaptionsParams {
             video_path: video_path.clone(),
             segments: segments.clone(),
         })?;
-        
+
         // Check file exists
         let json_path = format!("{}.capslap.json", video_path);
         assert!(std::path::Path::new(&json_path).exists());
-        
+
         // Load
         let loaded = load_captions(LoadCaptionsParams {
             video_path: video_path.clone(),
         })?;
-        
+
         assert!(loaded.segments.is_some());
         let loaded_segments = loaded.segments.unwrap();
         assert_eq!(loaded_segments.len(), 2);
         assert_eq!(loaded_segments[0].text, "Hello world");
         assert_eq!(loaded_segments[1].end_ms, 3500);
-        
+
         // Cleanup
         let _ = fs::remove_file(json_path);
-        
+
         Ok(())
     }
 }
-
-
 
 async fn optimized_multi_format_encode(
     id: &str,
@@ -570,16 +592,23 @@ async fn optimized_multi_format_encode(
     position: Option<String>,
     output_size: Option<String>,
     crop_strategy: Option<String>,
-    emit: &mut impl FnMut(RpcEvent)
+    emit: &mut impl FnMut(RpcEvent),
 ) -> Result<Vec<CaptionedVideoResult>> {
+    // Fail fast if libass is not available (required for burning subtitles)
+    if !crate::video::is_libass_available().await {
+        return Err(anyhow!("The installed FFmpeg version does not support burning subtitles (missing 'ass' filter). Please install a version of FFmpeg with libass support (e.g. via homebrew: 'brew install ffmpeg')."));
+    }
+
     if export_formats.is_empty() {
         return Err(anyhow!("No export formats specified"));
     }
 
     emit(RpcEvent::Log {
         id: id.into(),
-        message: format!("Export params: OutputSize={:?}, CropStrategy={:?}, Formats={:?}",
-            output_size, crop_strategy, export_formats)
+        message: format!(
+            "Export params: OutputSize={:?}, CropStrategy={:?}, Formats={:?}",
+            output_size, crop_strategy, export_formats
+        ),
     });
 
     let input_path = std::path::Path::new(input_video)
@@ -592,7 +621,7 @@ async fn optimized_multi_format_encode(
     for format in export_formats {
         emit(RpcEvent::Log {
             id: id.into(),
-            message: format!("Processing format loop for: {}", format)
+            message: format!("Processing format loop for: {}", format),
         });
         let target_ar = crate::video::parse_target_ar(format)?;
         let src_w = probe_result.width.unwrap_or(1920) as u32;
@@ -605,7 +634,7 @@ async fn optimized_multi_format_encode(
 
             match size.as_str() {
                 "1080p" => {
-                    // Logic: 
+                    // Logic:
                     // If Landscape (w > h): H=1080, W=1080*AR
                     // If Portrait (h > w):  W=1080, H=1080/AR
                     // If Square: 1080x1080
@@ -616,7 +645,7 @@ async fn optimized_multi_format_encode(
                         let h = (1080.0 / ar).round() as u32;
                         (1080, crate::video::round_even(h))
                     }
-                },
+                }
                 "720p" => {
                     if base_w > base_h {
                         let w = (720.0 * ar).round() as u32;
@@ -625,8 +654,8 @@ async fn optimized_multi_format_encode(
                         let h = (720.0 / ar).round() as u32;
                         (720, crate::video::round_even(h))
                     }
-                },
-                 "4k" | "2160p" => {
+                }
+                "4k" | "2160p" => {
                     // 4K usually refers to 3840x2160 (UHD)
                     // Landscape: H=2160
                     // Portrait: W=2160
@@ -637,8 +666,8 @@ async fn optimized_multi_format_encode(
                         let h = (2160.0 / ar).round() as u32;
                         (2160, crate::video::round_even(h))
                     }
-                },
-                _ => crate::video::canvas_no_downscale(src_w, src_h, target_ar)
+                }
+                _ => crate::video::canvas_no_downscale(src_w, src_h, target_ar),
             }
         } else {
             crate::video::canvas_no_downscale(src_w, src_h, target_ar)
@@ -647,25 +676,34 @@ async fn optimized_multi_format_encode(
         // Build ASS subtitle file optimized for this format
         emit(RpcEvent::Log {
             id: id.into(),
-            message: format!("Building ASS style for format: {}", format)
+            message: format!("Building ASS style for format: {}", format),
         });
         let style = default_ass_style(
-            target_w, target_h,
+            target_w,
+            target_h,
             font_name.as_deref(),
             text_color.as_deref(),
             highlight_word_color.as_deref(),
             outline_color.as_deref(),
             glow_effect,
-            position.as_deref()
+            position.as_deref(),
         );
         emit(RpcEvent::Log {
             id: id.into(),
-            message: format!("Building ASS document for format: {}", format)
+            message: format!("Building ASS document for format: {}", format),
         });
-        let ass_doc = build_ass_document(target_w, target_h, &style, segments, karaoke, multiline, glow_effect)?;
+        let ass_doc = build_ass_document(
+            target_w,
+            target_h,
+            &style,
+            segments,
+            karaoke,
+            multiline,
+            glow_effect,
+        )?;
         emit(RpcEvent::Log {
             id: id.into(),
-            message: format!("ASS document built for format: {}", format)
+            message: format!("ASS document built for format: {}", format),
         });
 
         let safe_format = format.replace(':', "x");
@@ -674,7 +712,7 @@ async fn optimized_multi_format_encode(
         fs::write(&ass_path, ass_doc)?;
         emit(RpcEvent::Log {
             id: id.into(),
-            message: format!("ASS file written to: {:?}", ass_path)
+            message: format!("ASS file written to: {:?}", ass_path),
         });
 
         format_ass_files.push((format.clone(), ass_path, target_w, target_h));
@@ -725,7 +763,8 @@ async fn optimized_multi_format_encode(
                 &probe_result,
                 tx,
                 idx,
-            ).await?;
+            )
+            .await?;
 
             Ok::<CaptionedVideoResult, anyhow::Error>(CaptionedVideoResult {
                 format,
@@ -757,10 +796,10 @@ async fn optimized_multi_format_encode(
                 match update {
                     InternalUpdate::Progress { index, value } => {
                         task_progress.insert(index, value);
-                        
+
                         let sum: f32 = task_progress.values().sum();
                         let avg_progress = sum / total_tasks as f32;
-                        
+
                         emit(RpcEvent::Progress {
                             id: id.to_string(),
                             status: format!("Exporting... ({:.0}%)", avg_progress * 100.0),
@@ -776,14 +815,14 @@ async fn optimized_multi_format_encode(
             }
         }
     }
-    
+
     // Final 100% progress
     emit(RpcEvent::Progress {
         id: id.to_string(),
         status: "Export complete".to_string(),
         progress: 1.0,
     });
-    
+
     // Sort results to match input order if needed, but for now just returning collected results
     Ok(captioned_videos)
 }
@@ -817,7 +856,8 @@ async fn optimized_single_format_encode(
         hardware_encoder,
         tx.clone(),
         index,
-    ).await;
+    )
+    .await;
 
     // If hardware encoder failed, try software fallback
     if result.is_err() && !matches!(hardware_encoder, crate::video::HardwareEncoder::Software) {
@@ -833,7 +873,8 @@ async fn optimized_single_format_encode(
             crate::video::HardwareEncoder::Software,
             tx,
             index,
-        ).await;
+        )
+        .await;
     }
 
     result
@@ -863,7 +904,7 @@ async fn try_encode_with_encoder(
         Some(&ass),
         hardware_encoder,
         crop_strategy,
-        is_hdr
+        is_hdr,
     );
 
     // Determine optimal audio codec and settings
@@ -884,81 +925,104 @@ async fn try_encode_with_encoder(
 
     let mut cmd = TokioCommand::new(&ffmpeg_path);
     cmd.kill_on_drop(true);
-    
+
     let duration_us = probe_result.duration.map(|s| (s * 1_000_000.0) as u64);
 
     cmd.args({
-            let mut args = vec![
-                "-y", "-i", input_video,
-                "-progress", "pipe:1",  // Enable progress reporting
-                "-vf", &vf,
-                "-fps_mode", "passthrough",       // Modern replacement for -vsync
-                "-threads", "0",                  // Use all available CPU cores
-                "-map", "0:v:0",                  // Map first video stream
-                "-map", "0:a?",                   // Map audio if present (optional)
-            ];
+        let mut args = vec![
+            "-y",
+            "-i",
+            input_video,
+            "-progress",
+            "pipe:1", // Enable progress reporting
+            "-vf",
+            &vf,
+            "-fps_mode",
+            "passthrough", // Modern replacement for -vsync
+            "-threads",
+            "0", // Use all available CPU cores
+            "-map",
+            "0:v:0", // Map first video stream
+            "-map",
+            "0:a?", // Map audio if present (optional)
+        ];
 
-            // Add hardware-optimized encoding parameters
-            match hardware_encoder {
-                crate::video::HardwareEncoder::VideoToolbox => {
-                    // VideoToolbox in this ffmpeg build doesn't support -q:v
-                    // We use -b:v (bitrate) instead.
-                    // CRF 16 equivalent is roughly usually 10-12Mbps for 1080p, scaling accordingly.
-                    // Since specific bitrate control is robust, we use a high bitrate.
-                    args.extend_from_slice(&[
-                        "-c:v", "h264_videotoolbox",
-                        "-b:v", "12M",                // High quality target (matching software CRF 16 intent)
-                        "-allow_sw", "1",             // Allow software fallback
-                        "-g", &gop_size_str,
-                    ]);
-                },
-                crate::video::HardwareEncoder::Nvenc => {
-                    // Note: pix_fmt is already set in the filter (format=nv12), no need to duplicate
-                    args.extend_from_slice(&[
-                        "-c:v", "h264_nvenc",
-                        "-cq", "16",
-                        "-preset", "p5",
-                        "-tune", "hq",
-                        "-rc", "vbr",
-                        "-g", &gop_size_str,
-                    ]);
-                },
-                crate::video::HardwareEncoder::Software => {
-                    // Note: pix_fmt is already set in the filter (format=yuv420p), no need to duplicate
-                    args.extend_from_slice(&[
-                        "-c:v", "libx264",
-                        "-preset", "medium",
-                        "-crf", "16",
-                        "-g", &gop_size_str,
-                    ]);
-                }
+        // Add hardware-optimized encoding parameters
+        match hardware_encoder {
+            crate::video::HardwareEncoder::VideoToolbox => {
+                // VideoToolbox in this ffmpeg build doesn't support -q:v
+                // We use -b:v (bitrate) instead.
+                // CRF 16 equivalent is roughly usually 10-12Mbps for 1080p, scaling accordingly.
+                // Since specific bitrate control is robust, we use a high bitrate.
+                args.extend_from_slice(&[
+                    "-c:v",
+                    "h264_videotoolbox",
+                    "-b:v",
+                    "12M", // High quality target (matching software CRF 16 intent)
+                    "-allow_sw",
+                    "1", // Allow software fallback
+                    "-g",
+                    &gop_size_str,
+                ]);
             }
-
-            args.push("-c:a");
-            args.push(&audio_codec);
-
-            // Add audio-specific args
-            args.extend(audio_args.iter().copied());
-
-            // Add explicit bitrate for re-encoded audio if not using copy
-            if audio_codec != "copy" && audio_codec == "aac" && audio_args.is_empty() {
-                args.extend_from_slice(&["-b:a", "160k"]);
+            crate::video::HardwareEncoder::Nvenc => {
+                // Note: pix_fmt is already set in the filter (format=nv12), no need to duplicate
+                args.extend_from_slice(&[
+                    "-c:v",
+                    "h264_nvenc",
+                    "-cq",
+                    "16",
+                    "-preset",
+                    "p5",
+                    "-tune",
+                    "hq",
+                    "-rc",
+                    "vbr",
+                    "-g",
+                    &gop_size_str,
+                ]);
             }
+            crate::video::HardwareEncoder::Software => {
+                // Note: pix_fmt is already set in the filter (format=yuv420p), no need to duplicate
+                args.extend_from_slice(&[
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "medium",
+                    "-crf",
+                    "16",
+                    "-g",
+                    &gop_size_str,
+                ]);
+            }
+        }
 
-            args.extend_from_slice(&[
-                "-movflags", "+faststart",       // Fast web playback
-                output_path
-            ]);
-            args
-        });
-        
+        args.push("-c:a");
+        args.push(&audio_codec);
+
+        // Add audio-specific args
+        args.extend(audio_args.iter().copied());
+
+        // Add explicit bitrate for re-encoded audio if not using copy
+        if audio_codec != "copy" && audio_codec == "aac" && audio_args.is_empty() {
+            args.extend_from_slice(&["-b:a", "160k"]);
+        }
+
+        args.extend_from_slice(&[
+            "-movflags",
+            "+faststart", // Fast web playback
+            output_path,
+        ]);
+        args
+    });
+
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::inherit());
-    
+
     // Log intent
     let _ = tx.send(InternalUpdate::Event(RpcEvent::Log {
         id: id.into(),
-        message: format!("Starting encoder: {:?}", hardware_encoder)
+        message: format!("Starting encoder: {:?}", hardware_encoder),
     }));
 
     let mut child = cmd.spawn()?;
@@ -967,18 +1031,25 @@ async fn try_encode_with_encoder(
     if let Some(stdout) = child.stdout.take() {
         let reader = tokio::io::BufReader::new(stdout);
         let mut lines = reader.lines();
-        
+
         while let Ok(Some(line)) = lines.next_line().await {
-             if line.starts_with("out_time_us=") {
+            if line.starts_with("out_time_us=") {
                 if let Ok(us) = line["out_time_us=".len()..].trim().parse::<u64>() {
-                     let progress = if let Some(total) = duration_us {
+                    let progress = if let Some(total) = duration_us {
                         if total > 0 {
                             (us as f64 / total as f64).min(0.99) as f32
-                        } else { 0.0 }
-                    } else { 0.0 };
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    };
 
                     // Send progress update
-                    let _ = tx.send(InternalUpdate::Progress { index, value: progress });
+                    let _ = tx.send(InternalUpdate::Progress {
+                        index,
+                        value: progress,
+                    });
                 }
             }
         }
@@ -992,41 +1063,48 @@ async fn try_encode_with_encoder(
             crate::video::HardwareEncoder::Nvenc => "h264_nvenc",
             crate::video::HardwareEncoder::Software => "libx264",
         };
-        return Err(anyhow!("FFmpeg failed to encode format for {} with encoder {}", id, encoder_name));
+        return Err(anyhow!(
+            "FFmpeg failed to encode format for {} with encoder {}",
+            id,
+            encoder_name
+        ));
     }
 
     Ok(())
 }
 
-
 // ---- Constants for horizontal stretch animation ----
-const STRETCH_X_PEAK: f32 = 1.03;  // 1.08–1.15 looks right
+const STRETCH_X_PEAK: f32 = 1.03; // 1.08–1.15 looks right
 const STRETCH_UP_MIN_MS: i64 = 0;
 const STRETCH_UP_MAX_MS: i64 = 150;
 const BIG_FONT_SIZE_MULTIPLIER: f32 = 1.1;
 
 // ---- Constants for bounce animation (non-karaoke) ----
-const BOUNCE_START: f32 = 0.85;   // 95%
-const BOUNCE_PEAK: f32 = 1.05;    // 103%
-const BOUNCE_END: f32 = 1.0;      // 100%
-const BOUNCE_UP_MS: i64 = 100;    // Time to reach peak
-const BOUNCE_DOWN_MS: i64 = 66;  // Time to settle
+const BOUNCE_START: f32 = 0.85; // 95%
+const BOUNCE_PEAK: f32 = 1.05; // 103%
+const BOUNCE_END: f32 = 1.0; // 100%
+const BOUNCE_UP_MS: i64 = 100; // Time to reach peak
+const BOUNCE_DOWN_MS: i64 = 66; // Time to settle
 
 // ---- Smart highlight tuning (non-karaoke) ----
-const HL_BASE_T: f32 = 2.5;         // base threshold
-const HL_HYSTERESIS: f32 = 0.7;     // make back-to-back highlights harder
-const HL_MIN_GAP_MS: u64 = 1200;    // min time between highlights
-const HL_MAX_RATIO: f32 = 0.35;     // cap ~35% of phrases highlighted
+const HL_BASE_T: f32 = 2.5; // base threshold
+const HL_HYSTERESIS: f32 = 0.7; // make back-to-back highlights harder
+const HL_MIN_GAP_MS: u64 = 1200; // min time between highlights
+const HL_MAX_RATIO: f32 = 0.35; // cap ~35% of phrases highlighted
 const HL_RECENT_WINDOW_MS: u64 = 5000; // window for repetition penalty
 
 fn push_glow_and_stroke(
     lines: &mut String,
-    start: &str, end: &str,
-    text_body: &str,      // ONLY \1c, \fs, \t(...). No \bord/\blur/\shad here.
-    x: i32, y: i32,
-    stroke_w: f32,        // black outline width
-    enable_glow: bool,    // whether to apply glow effect
-    glow_w: f32, glow_blur: f32, glow_alpha_hex: &str, // e.g. "&H80" ~ 50% opacity
+    start: &str,
+    end: &str,
+    text_body: &str, // ONLY \1c, \fs, \t(...). No \bord/\blur/\shad here.
+    x: i32,
+    y: i32,
+    stroke_w: f32,     // black outline width
+    enable_glow: bool, // whether to apply glow effect
+    glow_w: f32,
+    glow_blur: f32,
+    glow_alpha_hex: &str, // e.g. "&H80" ~ 50% opacity
     alignment: u32,       // ASS alignment value (2 = bottom center, 5 = middle center)
 ) {
     let common = format!("{{\\an{}\\q2\\pos({},{})\\be0}}", alignment, x, y);
@@ -1038,7 +1116,10 @@ fn push_glow_and_stroke(
             "{}{{\\1a&HFF\\bord{:.2}\\3c&HFFFFFF&\\3a{}\\blur{:.2}\\shad0}}",
             common, glow_w, glow_alpha_hex, glow_blur
         );
-        lines.push_str(&format!("Dialogue: 0,{},{},TikTok,,0,0,0,,{}{}\n", start, end, glow, text_body));
+        lines.push_str(&format!(
+            "Dialogue: 0,{},{},TikTok,,0,0,0,,{}{}\n",
+            start, end, glow, text_body
+        ));
     }
 
     // LAYER 1 (or 0 if no glow) — sharp black stroke + visible fill
@@ -1047,7 +1128,10 @@ fn push_glow_and_stroke(
         "{}{{\\1a&H00\\bord{:.2}\\3c&H000000&\\3a&H00\\blur0\\shad0}}",
         common, stroke_w
     );
-    lines.push_str(&format!("Dialogue: {},{},{},TikTok,,0,0,0,,{}{}\n", layer, start, end, stroke_fill, text_body));
+    lines.push_str(&format!(
+        "Dialogue: {},{},{},TikTok,,0,0,0,,{}{}\n",
+        layer, start, end, stroke_fill, text_body
+    ));
 }
 
 #[derive(Clone)]
@@ -1055,18 +1139,27 @@ fn push_glow_and_stroke(
 struct Phrase {
     start_ms: u64,
     end_ms: u64,
-    tokens: Vec<String>,     // plain words for layout
-    spans:  Vec<WordSpan>,   // timings per token (same length as tokens)
+    tokens: Vec<String>,  // plain words for layout
+    spans: Vec<WordSpan>, // timings per token (same length as tokens)
 }
 
 // Heuristics: new phrase if punctuation on previous token or gap > 350ms or length > 3 words
 fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
-    eprintln!("DEBUG: Entering coalesce_phrases with {} segments", segments.len());
+    eprintln!(
+        "DEBUG: Entering coalesce_phrases with {} segments",
+        segments.len()
+    );
     let mut all: Vec<WordSpan> = Vec::new();
     for s in segments {
         for w in &s.words {
             let t = w.text.trim();
-            if !t.is_empty() { all.push(WordSpan { start_ms: w.start_ms, end_ms: w.end_ms, text: t.to_string() }); }
+            if !t.is_empty() {
+                all.push(WordSpan {
+                    start_ms: w.start_ms,
+                    end_ms: w.end_ms,
+                    text: t.to_string(),
+                });
+            }
         }
         // Fallback: if a segment has text but no words, split evenly so nothing gets dropped
         if s.words.is_empty() && !s.text.trim().is_empty() {
@@ -1075,8 +1168,14 @@ fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
             let per = total / (toks.len().max(1) as u64);
             let mut t = s.start_ms;
             for tok in toks {
-                let s0 = t; let e0 = (t + per).min(s.end_ms); t = e0;
-                all.push(WordSpan { start_ms: s0, end_ms: e0, text: tok.to_string() });
+                let s0 = t;
+                let e0 = (t + per).min(s.end_ms);
+                t = e0;
+                all.push(WordSpan {
+                    start_ms: s0,
+                    end_ms: e0,
+                    text: tok.to_string(),
+                });
             }
         }
     }
@@ -1084,13 +1183,22 @@ fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
     let mut out: Vec<Phrase> = Vec::new();
     let mut cur: Vec<WordSpan> = Vec::new();
     for w in all.into_iter() {
-        if cur.is_empty() { cur.push(w); continue; }
+        if cur.is_empty() {
+            cur.push(w);
+            continue;
+        }
         let prev = cur.last().unwrap();
         let gap = w.start_ms.saturating_sub(prev.end_ms);
-        let hard_break = [".","!","?"].iter().any(|p| prev.text.ends_with(p)) || gap > 350 || cur.len() >= 3;
+        let hard_break =
+            [".", "!", "?"].iter().any(|p| prev.text.ends_with(p)) || gap > 350 || cur.len() >= 3;
         if hard_break {
             let tokens = cur.iter().map(|x| x.text.clone()).collect::<Vec<_>>();
-            out.push(Phrase{ start_ms: cur.first().unwrap().start_ms, end_ms: cur.last().unwrap().end_ms, tokens, spans: cur.clone() });
+            out.push(Phrase {
+                start_ms: cur.first().unwrap().start_ms,
+                end_ms: cur.last().unwrap().end_ms,
+                tokens,
+                spans: cur.clone(),
+            });
             cur = vec![w];
         } else {
             cur.push(w);
@@ -1098,14 +1206,20 @@ fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
     }
     if !cur.is_empty() {
         let tokens = cur.iter().map(|x| x.text.clone()).collect::<Vec<_>>();
-        out.push(Phrase{ start_ms: cur.first().unwrap().start_ms, end_ms: cur.last().unwrap().end_ms, tokens, spans: cur.clone() });
+        out.push(Phrase {
+            start_ms: cur.first().unwrap().start_ms,
+            end_ms: cur.last().unwrap().end_ms,
+            tokens,
+            spans: cur.clone(),
+        });
     }
     out
 }
 
-
 // ---- time quantization (ASS is 1/100s) ----
-fn ms_to_cs(ms: u64) -> i64 { (ms / 10) as i64 }
+fn ms_to_cs(ms: u64) -> i64 {
+    (ms / 10) as i64
+}
 fn cs_to_ass(cs: i64) -> String {
     let total = cs.max(0);
     let h = total / 360000; // 3600*100
@@ -1116,16 +1230,16 @@ fn cs_to_ass(cs: i64) -> String {
 }
 
 // Contiguous, non-overlapping windows in cs
-fn contiguous_cs_windows(words: &[WordSpan]) -> Vec<(i64,i64)> {
+fn contiguous_cs_windows(words: &[WordSpan]) -> Vec<(i64, i64)> {
     let mut out = Vec::with_capacity(words.len());
     for (i, w) in words.iter().enumerate() {
         let s = ms_to_cs(w.start_ms);
         let e = if i + 1 < words.len() {
-            ms_to_cs(words[i+1].start_ms) // [s, next_s)
+            ms_to_cs(words[i + 1].start_ms) // [s, next_s)
         } else {
-            ms_to_cs(w.end_ms)           // last word keeps its end
+            ms_to_cs(w.end_ms) // last word keeps its end
         };
-        out.push((s, (e.max(s+1)))); // at least 1 cs
+        out.push((s, (e.max(s + 1)))); // at least 1 cs
     }
     out
 }
@@ -1142,13 +1256,18 @@ fn bounce_tag() -> String {
     let start = (BOUNCE_START * 100.0).round() as u32;
     let peak = (BOUNCE_PEAK * 100.0).round() as u32;
     let end_val = (BOUNCE_END * 100.0).round() as u32;
-    format!(r"{{\fscx{start}\fscy{start}\t(0,{},\fscx{peak}\fscy{peak})\t({},{},\fscx{end_val}\fscy{end_val})}}",
-            BOUNCE_UP_MS, BOUNCE_UP_MS, BOUNCE_UP_MS + BOUNCE_DOWN_MS)
+    format!(
+        r"{{\fscx{start}\fscy{start}\t(0,{},\fscx{peak}\fscy{peak})\t({},{},\fscx{end_val}\fscy{end_val})}}",
+        BOUNCE_UP_MS,
+        BOUNCE_UP_MS,
+        BOUNCE_UP_MS + BOUNCE_DOWN_MS
+    )
 }
 
 // Uppercase + sanitize tokens (keeps punctuation)
 fn normalize_tokens(words: &[WordSpan]) -> Vec<String> {
-    words.iter()
+    words
+        .iter()
         .map(|w| w.text.trim())
         .filter(|t| !t.is_empty())
         .map(|t| t.to_uppercase())
@@ -1157,15 +1276,19 @@ fn normalize_tokens(words: &[WordSpan]) -> Vec<String> {
 
 // Split tokens containing hyphens into sub-tokens to allow wrapping
 // e.g. "FOO-BAR" -> ["FOO-", "BAR"]
-fn preprocess_hyphenated_tokens(tokens: &[String], spans: &[WordSpan]) -> (Vec<String>, Vec<WordSpan>) {
+fn preprocess_hyphenated_tokens(
+    tokens: &[String],
+    spans: &[WordSpan],
+) -> (Vec<String>, Vec<WordSpan>) {
     let mut new_tokens = Vec::new();
     let mut new_spans = Vec::new();
 
     for (token, span) in tokens.iter().zip(spans.iter()) {
-        if token.contains('-') && token.len() > 3 { // Only split if length meaningful
+        if token.contains('-') && token.len() > 3 {
+            // Only split if length meaningful
             let parts: Vec<&str> = token.split('-').collect();
             let count = parts.len();
-            
+
             // First pass: collect the actual string parts we want to use
             let mut sub_tokens = Vec::new();
             for (i, part) in parts.iter().enumerate() {
@@ -1174,40 +1297,40 @@ fn preprocess_hyphenated_tokens(tokens: &[String], spans: &[WordSpan]) -> (Vec<S
                 if i < count - 1 {
                     text.push('-');
                 }
-                
+
                 if !text.is_empty() {
                     sub_tokens.push(text);
                 }
             }
-            
+
             // Second pass: distribute time proportionally
             let total_len: usize = sub_tokens.iter().map(|t| t.len()).sum();
             let total_dur = (span.end_ms - span.start_ms) as f64;
             let mut current_start = span.start_ms as f64;
-            
+
             if total_len > 0 {
                 for (i, sub_token) in sub_tokens.iter().enumerate() {
                     let len = sub_token.len();
                     // Calculate duration for this part
-                    // Use f64 for precision, accumulate error? 
+                    // Use f64 for precision, accumulate error?
                     // Simple proportion:
                     let fraction = len as f64 / total_len as f64;
                     let part_dur = total_dur * fraction;
-                    
+
                     let s_ms = current_start.round() as u64;
                     let e_ms = if i == sub_tokens.len() - 1 {
                         span.end_ms // Ensure last one aligns exactly with end
                     } else {
                         (current_start + part_dur).round() as u64
                     };
-                    
+
                     new_tokens.push(sub_token.clone());
                     new_spans.push(WordSpan {
                         start_ms: s_ms,
                         end_ms: e_ms,
                         text: sub_token.clone(),
                     });
-                    
+
                     current_start += part_dur;
                 }
             } else {
@@ -1215,7 +1338,6 @@ fn preprocess_hyphenated_tokens(tokens: &[String], spans: &[WordSpan]) -> (Vec<S
                 new_tokens.push(token.clone());
                 new_spans.push(span.clone());
             }
-
         } else {
             new_tokens.push(token.clone());
             new_spans.push(span.clone());
@@ -1225,7 +1347,12 @@ fn preprocess_hyphenated_tokens(tokens: &[String], spans: &[WordSpan]) -> (Vec<S
 }
 
 // Simple width check for karaoke - split long phrases into single-line segments
-fn split_phrase_for_width(tokens: &[String], spans: &[WordSpan], frame_w: u32, font_px: u32) -> Vec<(Vec<String>, Vec<WordSpan>)> {
+fn split_phrase_for_width(
+    tokens: &[String],
+    spans: &[WordSpan],
+    frame_w: u32,
+    font_px: u32,
+) -> Vec<(Vec<String>, Vec<WordSpan>)> {
     let (tokens, spans) = preprocess_hyphenated_tokens(tokens, spans); // Handle hyphens first
 
     let est_char_width = (font_px as f32 * 0.7).max(1.0);
@@ -1271,11 +1398,13 @@ fn bgr_from_aa_bgrr(aa_bgrr: &str) -> String {
 }
 
 fn assemble_colored_two_lines(
-    tokens: &[String], hi: usize,
-    white_bgr: &str, hi_bgr: &str,
+    tokens: &[String],
+    hi: usize,
+    white_bgr: &str,
+    hi_bgr: &str,
     line1_count: usize,
     header: &str,
-    font_size: u32
+    font_size: u32,
 ) -> String {
     let white = format!("{{\\1c&H{}&\\fs{}}}", white_bgr, font_size);
     // Only create bigger font style if we're actually highlighting something
@@ -1289,26 +1418,31 @@ fn assemble_colored_two_lines(
 
     let mut s = String::from(header); // will include \an2 \pos \q2 and stretch
     for i in 0..tokens.len() {
-        if i == line1_count { s.push_str(r"\N"); }
+        if i == line1_count {
+            s.push_str(r"\N");
+        }
         // Only highlight if hi is a valid index (not usize::MAX)
         let should_highlight = has_highlighting && i == hi;
         s.push_str(if should_highlight { &hi_style } else { &white });
-        let t = tokens[i].replace('\\', r"\\").replace('{', r"\{").replace('}', r"\}");
+        let t = tokens[i]
+            .replace('\\', r"\\")
+            .replace('{', r"\{")
+            .replace('}', r"\}");
         s.push_str(&t); // Moved s.push_str(&t) earlier to use t for check? No wait.
-        
+
         // original was:
         // let t = ...
         // s.push_str(&t);
         // if i + 1 < tokens.len() { s.push(' '); }
-        
+
         // New logic:
         // Check if CURRENT token (not t, but tokens[i]) ends with '-'
         // Note: tokens[i] might be raw string.
         if i + 1 < tokens.len() {
-             let ends_with_hyphen = tokens[i].ends_with('-') && tokens[i].len() > 1;
-             if !ends_with_hyphen {
-                 s.push(' ');
-             }
+            let ends_with_hyphen = tokens[i].ends_with('-') && tokens[i].len() > 1;
+            if !ends_with_hyphen {
+                s.push(' ');
+            }
         }
     }
     s
@@ -1317,14 +1451,14 @@ fn assemble_colored_two_lines(
 struct AssStyle {
     font_name: String,
     font_size: u32,
-    primary: String,     // base (white)
-    secondary: String,   // unused here
+    primary: String,   // base (white)
+    secondary: String, // unused here
     outline: String,
     outline_w: u32,
     shadow: u32,
-    align: u32,    // 1..9 grid; 2 = bottom-center
-    margin_v: u32, // pixels
-    highlight: String,   // green for current word
+    align: u32,        // 1..9 grid; 2 = bottom-center
+    margin_v: u32,     // pixels
+    highlight: String, // green for current word
 }
 
 fn _pct_to_margin_v(frame_h: u32, y_pct_from_top: f32) -> u32 {
@@ -1338,12 +1472,63 @@ fn stopwords() -> &'static HashSet<&'static str> {
     use std::sync::LazyLock;
     static SW: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         [
-            "a","an","the","to","of","in","on","at","by","for","with","and","or","but",
-            "i","you","he","she","we","they","be","is","are","was","were","have","has","had",
-            "do","does","did","will","would","can","could","should","shall","may","might","must",
-            "gonna","wanna","like","just","really","very","actually","literally","kinda","sorta",
-            "um","uh","you","know"
-        ].into_iter().collect()
+            "a",
+            "an",
+            "the",
+            "to",
+            "of",
+            "in",
+            "on",
+            "at",
+            "by",
+            "for",
+            "with",
+            "and",
+            "or",
+            "but",
+            "i",
+            "you",
+            "he",
+            "she",
+            "we",
+            "they",
+            "be",
+            "is",
+            "are",
+            "was",
+            "were",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "can",
+            "could",
+            "should",
+            "shall",
+            "may",
+            "might",
+            "must",
+            "gonna",
+            "wanna",
+            "like",
+            "just",
+            "really",
+            "very",
+            "actually",
+            "literally",
+            "kinda",
+            "sorta",
+            "um",
+            "uh",
+            "you",
+            "know",
+        ]
+        .into_iter()
+        .collect()
     });
     &SW
 }
@@ -1352,9 +1537,11 @@ fn power_words() -> &'static HashSet<&'static str> {
     use std::sync::LazyLock;
     static PW: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         [
-            "not","no","never","without","dont","can't","cant","wont","why","must","need",
-            "free","new","massive","insane","huge","proof","secret","banned"
-        ].into_iter().collect()
+            "not", "no", "never", "without", "dont", "can't", "cant", "wont", "why", "must",
+            "need", "free", "new", "massive", "insane", "huge", "proof", "secret", "banned",
+        ]
+        .into_iter()
+        .collect()
     });
     &PW
 }
@@ -1364,7 +1551,9 @@ fn build_global_tf(segments: &[CaptionSegment]) -> HashMap<String, u32> {
     for s in segments {
         for w in &s.words {
             let t = w.text.trim();
-            if t.is_empty() { continue; }
+            if t.is_empty() {
+                continue;
+            }
             *tf.entry(t.to_lowercase()).or_insert(0) += 1;
         }
     }
@@ -1372,18 +1561,26 @@ fn build_global_tf(segments: &[CaptionSegment]) -> HashMap<String, u32> {
 }
 
 fn original_tokens(spans: &[WordSpan]) -> Vec<String> {
-    spans.iter().map(|w| w.text.trim().to_string())
-        .filter(|t| !t.is_empty()).collect()
+    spans
+        .iter()
+        .map(|w| w.text.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
 }
 
 fn has_digit_or_currency(s: &str) -> bool {
-    s.chars().any(|c| c.is_ascii_digit() || c == '$' || c == '%' || c == '#')
+    s.chars()
+        .any(|c| c.is_ascii_digit() || c == '$' || c == '%' || c == '#')
 }
 
 fn looks_proper_noun(token: &str, idx_in_phrase: usize) -> bool {
-    if idx_in_phrase == 0 { return false; }
+    if idx_in_phrase == 0 {
+        return false;
+    }
     let chars: Vec<char> = token.chars().collect();
-    if chars.is_empty() { return false; }
+    if chars.is_empty() {
+        return false;
+    }
     let first = chars[0];
     first.is_uppercase() && !token.chars().all(|c| c.is_uppercase())
 }
@@ -1394,15 +1591,17 @@ fn ends_with_content_suffix(token: &str) -> bool {
 }
 
 fn mean_std(vals: &[f32]) -> (f32, f32) {
-    if vals.is_empty() { return (0.0, 0.0); }
+    if vals.is_empty() {
+        return (0.0, 0.0);
+    }
     let m = vals.iter().sum::<f32>() / vals.len() as f32;
-    let v = vals.iter().map(|x| (x - m)*(x - m)).sum::<f32>() / vals.len() as f32;
+    let v = vals.iter().map(|x| (x - m) * (x - m)).sum::<f32>() / vals.len() as f32;
     (m, v.sqrt())
 }
 
 struct HighlightState {
-    tf: HashMap<String,u32>,
-    recent: VecDeque<(String,u64)>,   // (token_lower, time_ms)
+    tf: HashMap<String, u32>,
+    recent: VecDeque<(String, u64)>, // (token_lower, time_ms)
     last_hl_ms: Option<u64>,
     last_hl_phrase: Option<usize>,
     phrases_done: u32,
@@ -1424,8 +1623,11 @@ impl HighlightState {
     fn push_recent_phrase(&mut self, tokens: &[String], end_ms: u64) {
         // drop old
         while let Some((_, t)) = self.recent.front().cloned() {
-            if end_ms.saturating_sub(t) > HL_RECENT_WINDOW_MS { self.recent.pop_front(); }
-            else { break; }
+            if end_ms.saturating_sub(t) > HL_RECENT_WINDOW_MS {
+                self.recent.pop_front();
+            } else {
+                break;
+            }
         }
         for t in tokens {
             self.recent.push_back((t.to_lowercase(), end_ms));
@@ -1433,8 +1635,9 @@ impl HighlightState {
     }
 
     fn recent_count(&self, token_lower: &str, now_ms: u64) -> u32 {
-        self.recent.iter()
-            .filter(|(w,t)| w == token_lower && now_ms.saturating_sub(*t) <= HL_RECENT_WINDOW_MS)
+        self.recent
+            .iter()
+            .filter(|(w, t)| w == token_lower && now_ms.saturating_sub(*t) <= HL_RECENT_WINDOW_MS)
             .count() as u32
     }
 }
@@ -1443,7 +1646,7 @@ fn choose_highlight_idx(
     tokens_orig: &[String],
     spans: &[WordSpan],
     phrase_idx: usize,
-    st: &mut HighlightState
+    st: &mut HighlightState,
 ) -> Option<usize> {
     let sw = stopwords();
     let pw = power_words();
@@ -1451,12 +1654,18 @@ fn choose_highlight_idx(
     // rarity controls
     let mut threshold = HL_BASE_T;
     let phrase_start = spans.first().map(|w| w.start_ms).unwrap_or(0);
-    let phrase_end   = spans.last().map(|w| w.end_ms).unwrap_or(0);
+    let phrase_end = spans.last().map(|w| w.end_ms).unwrap_or(0);
 
     if let Some(last) = st.last_hl_ms {
-        if phrase_start.saturating_sub(last) < HL_MIN_GAP_MS { threshold += 1.0; }
+        if phrase_start.saturating_sub(last) < HL_MIN_GAP_MS {
+            threshold += 1.0;
+        }
     }
-    if st.last_hl_phrase.map(|p| p + 1 == phrase_idx).unwrap_or(false) {
+    if st
+        .last_hl_phrase
+        .map(|p| p + 1 == phrase_idx)
+        .unwrap_or(false)
+    {
         threshold += HL_HYSTERESIS; // avoid back-to-back
     }
     if st.phrases_done > 0 && (st.phrases_hl as f32) / (st.phrases_done as f32) >= HL_MAX_RATIO {
@@ -1464,13 +1673,19 @@ fn choose_highlight_idx(
     }
 
     // candidates
-    let cand: Vec<usize> = (0..tokens_orig.len()).filter(|&i| {
-        let t = tokens_orig[i].trim();
-        if t.is_empty() { return false; }
-        let low = t.to_lowercase();
-        if sw.contains(low.as_str()) { return false; }
-        t.len() >= 3 || has_digit_or_currency(t)
-    }).collect();
+    let cand: Vec<usize> = (0..tokens_orig.len())
+        .filter(|&i| {
+            let t = tokens_orig[i].trim();
+            if t.is_empty() {
+                return false;
+            }
+            let low = t.to_lowercase();
+            if sw.contains(low.as_str()) {
+                return false;
+            }
+            t.len() >= 3 || has_digit_or_currency(t)
+        })
+        .collect();
 
     if cand.is_empty() {
         st.phrases_done += 1;
@@ -1480,25 +1695,41 @@ fn choose_highlight_idx(
 
     // features needing per-phrase stats
     let lens: Vec<f32> = tokens_orig.iter().map(|t| t.len() as f32).collect();
-    let mut lens_sorted = lens.clone(); lens_sorted.sort_by(|a,b| a.partial_cmp(b).unwrap());
-    let med_len = lens_sorted[lens_sorted.len()/2];
+    let mut lens_sorted = lens.clone();
+    lens_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let med_len = lens_sorted[lens_sorted.len() / 2];
 
-    let durs: Vec<f32> = spans.iter().map(|w| (w.end_ms - w.start_ms) as f32).collect();
+    let durs: Vec<f32> = spans
+        .iter()
+        .map(|w| (w.end_ms - w.start_ms) as f32)
+        .collect();
     let (mean_dur, std_dur) = mean_std(&durs);
 
     // score
-    let mut best: Option<(usize,f32)> = None;
+    let mut best: Option<(usize, f32)> = None;
     for &i in &cand {
         let t = tokens_orig[i].trim();
         let low = t.to_lowercase();
         let mut s = 0.0;
 
-        if has_digit_or_currency(t) { s += 3.0; }
-        if st.tf.get(&low).copied().unwrap_or(0) <= 2 { s += 2.0; }
-        if looks_proper_noun(t, i) { s += 1.5; }
-        if pw.contains(low.as_str()) { s += 1.5; }
-        if ends_with_content_suffix(t) { s += 1.0; }
-        if (t.len() as f32) > med_len { s += 1.0; }
+        if has_digit_or_currency(t) {
+            s += 3.0;
+        }
+        if st.tf.get(&low).copied().unwrap_or(0) <= 2 {
+            s += 2.0;
+        }
+        if looks_proper_noun(t, i) {
+            s += 1.5;
+        }
+        if pw.contains(low.as_str()) {
+            s += 1.5;
+        }
+        if ends_with_content_suffix(t) {
+            s += 1.0;
+        }
+        if (t.len() as f32) > med_len {
+            s += 1.0;
+        }
 
         if std_dur > 0.0 {
             let z = (durs[i] - mean_dur) / std_dur;
@@ -1506,28 +1737,39 @@ fn choose_highlight_idx(
         }
 
         // pause / phrase-final emphasis
-        if i + 1 == spans.len() { s += 0.5; }
-        else {
-            let gap = spans[i+1].start_ms.saturating_sub(spans[i].end_ms);
-            if gap >= 250 { s += 0.5; }
+        if i + 1 == spans.len() {
+            s += 0.5;
+        } else {
+            let gap = spans[i + 1].start_ms.saturating_sub(spans[i].end_ms);
+            if gap >= 250 {
+                s += 0.5;
+            }
         }
 
         // penalties
-        if st.recent_count(&low, phrase_end) > 3 { s -= 2.0; }
-        if t.chars().all(|c| c.is_uppercase()) && !tokens_orig.iter().all(|w| w.chars().all(|c| c.is_uppercase())) {
+        if st.recent_count(&low, phrase_end) > 3 {
+            s -= 2.0;
+        }
+        if t.chars().all(|c| c.is_uppercase())
+            && !tokens_orig
+                .iter()
+                .all(|w| w.chars().all(|c| c.is_uppercase()))
+        {
             s -= 1.0;
         }
 
         // tie-breakers inline
         if s >= threshold {
             match best {
-                None => best = Some((i,s)),
-                Some((bi,bs)) => {
+                None => best = Some((i, s)),
+                Some((bi, bs)) => {
                     if (s > bs)
                         || (s == bs && i > bi)              // later in phrase
                         || (s == bs && durs[i] > durs[bi])   // longer held
                         || (s == bs && st.tf.get(&low).unwrap_or(&u32::MAX) < st.tf.get(&tokens_orig[bi].to_lowercase()).unwrap_or(&u32::MAX))
-                    { best = Some((i,s)); }
+                    {
+                        best = Some((i, s));
+                    }
                 }
             }
         }
@@ -1536,7 +1778,7 @@ fn choose_highlight_idx(
     st.phrases_done += 1;
     st.push_recent_phrase(tokens_orig, phrase_end);
 
-    if let Some((idx,_)) = best {
+    if let Some((idx, _)) = best {
         st.phrases_hl += 1;
         st.last_hl_ms = Some(phrase_end);
         st.last_hl_phrase = Some(phrase_idx);
@@ -1553,15 +1795,18 @@ fn build_ass_document(
     segments: &[CaptionSegment],
     karaoke: bool,
     multiline: bool,
-    glow_effect: bool
+    glow_effect: bool,
 ) -> Result<String> {
     if segments.is_empty() {
         return Err(anyhow!("No caption segments"));
     }
-    eprintln!("DEBUG: build_ass_document start. karaoke={}, multiline={}, glow={}", karaoke, multiline, glow_effect);
+    eprintln!(
+        "DEBUG: build_ass_document start. karaoke={}, multiline={}, glow={}",
+        karaoke, multiline, glow_effect
+    );
 
     let header = format!(
-r#"[Script Info]
+        r#"[Script Info]
 ScriptType: v4.00+
 PlayResX: {w}
 PlayResY: {h}
@@ -1574,11 +1819,17 @@ Style: TikTok,{font},{size},{pri},{sec},{out},&H64000000,0,0,0,0,100,100,0,0,1,{
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 "#,
-        w = w, h = h,
-        font = style.font_name, size = style.font_size,
-        pri = style.primary, sec = style.secondary,
-        out = style.outline, ow = style.outline_w, sh = style.shadow,
-        al = style.align, mv = style.margin_v
+        w = w,
+        h = h,
+        font = style.font_name,
+        size = style.font_size,
+        pri = style.primary,
+        sec = style.secondary,
+        out = style.outline,
+        ow = style.outline_w,
+        sh = style.shadow,
+        al = style.align,
+        mv = style.margin_v
     );
 
     let mut lines = String::new();
@@ -1586,7 +1837,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
     if karaoke {
         let phrases = coalesce_phrases(segments);
         let white_bgr = bgr_from_aa_bgrr(&style.primary);
-        let hi_bgr    = bgr_from_aa_bgrr(&style.highlight);
+        let hi_bgr = bgr_from_aa_bgrr(&style.highlight);
 
         // Simple single-line karaoke: split phrases that are too wide, then process each segment
         for ph in phrases {
@@ -1594,12 +1845,15 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             let segments = if multiline {
                 split_phrase_two_lines(&tokens_upper, &ph.spans, w, style.font_size)
             } else {
-                split_phrase_for_width(&tokens_upper, &ph.spans, w, style.font_size).into_iter().map(|(t, s)| (t, s, usize::MAX)).collect()
+                split_phrase_for_width(&tokens_upper, &ph.spans, w, style.font_size)
+                    .into_iter()
+                    .map(|(t, s)| (t, s, usize::MAX))
+                    .collect()
             };
 
             // Calculate Y position based on alignment
             let y_pos = match style.align {
-                5 => (h / 2) as i32, // Middle center
+                5 => (h / 2) as i32,                            // Middle center
                 _ => (h as i32 - style.margin_v as i32).max(0), // Bottom center
             };
 
@@ -1608,59 +1862,93 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                 let windows = contiguous_cs_windows(&segment_spans);
 
                 for (i, (cs0, cs1)) in windows.iter().enumerate() {
-                let dur_ms = (cs1 - cs0) * 10;
-                let blur_value = if glow_effect { 6.0 } else { 2.0 };
+                    let dur_ms = (cs1 - cs0) * 10;
+                    let blur_value = if glow_effect { 6.0 } else { 2.0 };
 
-                let header = format!(
-                    "{{\\an{}\\q2\\pos({},{})\\bord{}\\blur{:.1}}}{}",
-                    style.align, (w/2), y_pos,
-                    style.outline_w,
-                    blur_value,
-                    stretch_tag_ms(dur_ms)
-                );
+                    let header = format!(
+                        "{{\\an{}\\q2\\pos({},{})\\bord{}\\blur{:.1}}}{}",
+                        style.align,
+                        (w / 2),
+                        y_pos,
+                        style.outline_w,
+                        blur_value,
+                        stretch_tag_ms(dur_ms)
+                    );
 
-                if glow_effect {
-                    // Glow layer
-                    let glow_header = format!(
+                    if glow_effect {
+                        // Glow layer
+                        let glow_header = format!(
                         "{{\\an{}\\q2\\pos({},{})\\1a&HFF\\bord{}\\3c&HFFFFFF&\\3a&H80\\blur{:.1}\\shad0}}{}",
                         style.align, (w/2), y_pos,
                         style.outline_w as f32 * 2.0,
                         6.0,
                         stretch_tag_ms(dur_ms)
                     );
-                    let glow_text = assemble_colored_two_lines(&segment_tokens, i, &white_bgr, &hi_bgr, split_idx, &glow_header, style.font_size);
-                    lines.push_str(&format!(
-                        "Dialogue: 0,{},{},TikTok,,0,0,0,,{}\n",
-                        cs_to_ass(*cs0), cs_to_ass(*cs1), glow_text
-                    ));
+                        let glow_text = assemble_colored_two_lines(
+                            &segment_tokens,
+                            i,
+                            &white_bgr,
+                            &hi_bgr,
+                            split_idx,
+                            &glow_header,
+                            style.font_size,
+                        );
+                        lines.push_str(&format!(
+                            "Dialogue: 0,{},{},TikTok,,0,0,0,,{}\n",
+                            cs_to_ass(*cs0),
+                            cs_to_ass(*cs1),
+                            glow_text
+                        ));
 
-                    // Main text layer
-                    let main_header = format!(
-                        "{{\\an{}\\q2\\pos({},{})\\bord{}\\blur0\\shad0}}{}",
-                        style.align, (w/2), y_pos,
-                        style.outline_w,
-                        stretch_tag_ms(dur_ms)
-                    );
-                    let main_text = assemble_colored_two_lines(&segment_tokens, i, &white_bgr, &hi_bgr, split_idx, &main_header, style.font_size);
-                    lines.push_str(&format!(
-                        "Dialogue: 1,{},{},TikTok,,0,0,0,,{}\n",
-                        cs_to_ass(*cs0), cs_to_ass(*cs1), main_text
-                    ));
-                } else {
-                    // Single layer
-                    let text = assemble_colored_two_lines(&segment_tokens, i, &white_bgr, &hi_bgr, split_idx, &header, style.font_size);
-                    lines.push_str(&format!(
-                        "Dialogue: 0,{},{},TikTok,,0,0,0,,{}\n",
-                        cs_to_ass(*cs0), cs_to_ass(*cs1), text
-                    ));
+                        // Main text layer
+                        let main_header = format!(
+                            "{{\\an{}\\q2\\pos({},{})\\bord{}\\blur0\\shad0}}{}",
+                            style.align,
+                            (w / 2),
+                            y_pos,
+                            style.outline_w,
+                            stretch_tag_ms(dur_ms)
+                        );
+                        let main_text = assemble_colored_two_lines(
+                            &segment_tokens,
+                            i,
+                            &white_bgr,
+                            &hi_bgr,
+                            split_idx,
+                            &main_header,
+                            style.font_size,
+                        );
+                        lines.push_str(&format!(
+                            "Dialogue: 1,{},{},TikTok,,0,0,0,,{}\n",
+                            cs_to_ass(*cs0),
+                            cs_to_ass(*cs1),
+                            main_text
+                        ));
+                    } else {
+                        // Single layer
+                        let text = assemble_colored_two_lines(
+                            &segment_tokens,
+                            i,
+                            &white_bgr,
+                            &hi_bgr,
+                            split_idx,
+                            &header,
+                            style.font_size,
+                        );
+                        lines.push_str(&format!(
+                            "Dialogue: 0,{},{},TikTok,,0,0,0,,{}\n",
+                            cs_to_ass(*cs0),
+                            cs_to_ass(*cs1),
+                            text
+                        ));
+                    }
                 }
-            }
             }
         }
     } else {
         let white_bgr = bgr_from_aa_bgrr(&style.primary);
-        let hi_bgr    = bgr_from_aa_bgrr(&style.highlight);
-        let x = (w/2) as i32;
+        let hi_bgr = bgr_from_aa_bgrr(&style.highlight);
+        let x = (w / 2) as i32;
         // Calculate Y position based on alignment
         let y = match style.align {
             5 => (h / 2) as i32, // Middle center - use actual center of frame
@@ -1689,10 +1977,15 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                 let segment_tokens_orig = original_tokens(&segment_spans);
 
                 let start = cs_to_ass(ms_to_cs(segment_spans.first().unwrap().start_ms));
-                let end   = cs_to_ass(ms_to_cs(segment_spans.last().unwrap().end_ms));
+                let end = cs_to_ass(ms_to_cs(segment_spans.last().unwrap().end_ms));
 
                 // Decide which single word (if any) to highlight in this segment
-                let hi_opt = choose_highlight_idx(&segment_tokens_orig, &segment_spans, p_idx, &mut hl_state);
+                let hi_opt = choose_highlight_idx(
+                    &segment_tokens_orig,
+                    &segment_spans,
+                    p_idx,
+                    &mut hl_state,
+                );
                 let hi_idx = hi_opt.unwrap_or(usize::MAX); // usize::MAX => no highlight
 
                 let is_storyteller = style.align == 5; // Safe-center / Storyteller mode
@@ -1700,45 +1993,58 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                 // Build text body
                 let text_body = if is_storyteller {
                     // For storyteller, use multiline assembly with dynamic width balancing
-                     let est_char_width = (style.font_size as f32 * 0.50).max(1.0);
-                     let max_chars = ((w as f32 * 0.85) / est_char_width).floor() as usize;
-                     
-                     let total_chars: usize = segment_tokens.iter().map(|t| t.len()).sum();
-                     // Target 3-5 lines for a nice block
-                     let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
-                     // Clamp: at least 25 chars (for long words), at most max_chars
-                     let min_chars = 25.min(max_chars).max(1);
-                     let wrapping_width = soft_target.clamp(min_chars, max_chars);
+                    let est_char_width = (style.font_size as f32 * 0.50).max(1.0);
+                    let max_chars = ((w as f32 * 0.85) / est_char_width).floor() as usize;
 
-                     // Prepend bounce tag for entrance
-                     let mut body = bounce_tag();
-                     body.push_str(&assemble_multiline(
-                        &segment_tokens, hi_idx, &white_bgr, &hi_bgr,
-                        style.font_size, wrapping_width
+                    let total_chars: usize = segment_tokens.iter().map(|t| t.len()).sum();
+                    // Target 3-5 lines for a nice block
+                    let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
+                    // Clamp: at least 25 chars (for long words), at most max_chars
+                    let min_chars = 25.min(max_chars).max(1);
+                    let wrapping_width = soft_target.clamp(min_chars, max_chars);
+
+                    // Prepend bounce tag for entrance
+                    let mut body = bounce_tag();
+                    body.push_str(&assemble_multiline(
+                        &segment_tokens,
+                        hi_idx,
+                        &white_bgr,
+                        &hi_bgr,
+                        style.font_size,
+                        wrapping_width,
                     ));
                     body
                 } else {
-                     // Standard 1-2 line assembly
+                    // Standard 1-2 line assembly
                     assemble_colored_two_lines(
-                        &segment_tokens, hi_idx, &white_bgr, &hi_bgr,
-                        usize::MAX,               // no line break forced here, let it flow or use split logic
-                        &bounce_tag(),            // entrance scale
-                        style.font_size
+                        &segment_tokens,
+                        hi_idx,
+                        &white_bgr,
+                        &hi_bgr,
+                        usize::MAX, // no line break forced here, let it flow or use split logic
+                        &bounce_tag(), // entrance scale
+                        style.font_size,
                     )
                 };
 
                 // Your layered renderer (glow + black stroke + fill)
-                let glow_w    = style.outline_w as f32 * 2.0;
+                let glow_w = style.outline_w as f32 * 2.0;
                 let glow_blur = 6.0;
-                let stroke_w  = style.outline_w as f32;
+                let stroke_w = style.outline_w as f32;
 
                 push_glow_and_stroke(
-                    &mut lines, &start, &end, &text_body,
-                    x, y,
+                    &mut lines,
+                    &start,
+                    &end,
+                    &text_body,
+                    x,
+                    y,
                     stroke_w,
-                    glow_effect,  // Use the parameter to control glow
-                    glow_w, glow_blur, "&H80",  // ~50% white glow
-                    style.align   // Pass the alignment from style
+                    glow_effect, // Use the parameter to control glow
+                    glow_w,
+                    glow_blur,
+                    "&H80",      // ~50% white glow
+                    style.align, // Pass the alignment from style
                 );
             }
         }
@@ -1781,26 +2087,30 @@ fn default_ass_style(
     highlight_color: Option<&str>,
     outline_color: Option<&str>,
     _glow_effect: bool,
-    position: Option<&str>
+    position: Option<&str>,
 ) -> AssStyle {
     // Convert hex colors to ASS format (AABBGGRR), use defaults if None
-    let primary = text_color.map(hex_to_ass_color).unwrap_or_else(|| "&H00FFFFFF".into());
-    let highlight = highlight_color.map(hex_to_ass_color).unwrap_or_else(|| "&H0000FFFE".into());
-    let outline = outline_color.map(hex_to_ass_color).unwrap_or_else(|| "&H00000000".into());
+    let primary = text_color
+        .map(hex_to_ass_color)
+        .unwrap_or_else(|| "&H00FFFFFF".into());
+    let highlight = highlight_color
+        .map(hex_to_ass_color)
+        .unwrap_or_else(|| "&H0000FFFE".into());
+    let outline = outline_color
+        .map(hex_to_ass_color)
+        .unwrap_or_else(|| "&H00000000".into());
 
     // Helper for percentage of height
-    let pct_h = |p: f32| -> u32 {
-        (frame_h as f32 * (p / 100.0)).round() as u32
-    };
+    let pct_h = |p: f32| -> u32 { (frame_h as f32 * (p / 100.0)).round() as u32 };
 
     // Determine vertical position and alignment based on position parameter
     let (align, margin_v) = match position.unwrap_or("bottom") {
-        "top" => (8, pct_h(12.0)), // Top center, 12% from top
-        "top-quarter" => (8, pct_h(25.0)), // Top center, 25% from top
-        "center" => (5, 0), // Middle center
+        "top" => (8, pct_h(12.0)),            // Top center, 12% from top
+        "top-quarter" => (8, pct_h(25.0)),    // Top center, 25% from top
+        "center" => (5, 0),                   // Middle center
         "bottom-quarter" => (2, pct_h(25.0)), // Bottom center, 25% from bottom
-        "safe-center" => (5, 0), // Legacy support: Middle center
-        _ => (2, pct_h(12.0)), // Bottom center, 12% from bottom (default)
+        "safe-center" => (5, 0),              // Legacy support: Middle center
+        _ => (2, pct_h(12.0)),                // Bottom center, 12% from bottom (default)
     };
 
     AssStyle {
@@ -1819,17 +2129,25 @@ fn default_ass_style(
 
 // Split text into multiple lines (3-4 lines) for "Storyteller" mode
 // Aim for balanced lines, filling the middle of the screen
-fn split_phrase_multiline(tokens: &[String], spans: &[WordSpan], frame_w: u32, font_px: u32) -> Vec<(Vec<String>, Vec<WordSpan>)> {
-    eprintln!("DEBUG: split_phrase_multiline start. tokens={}", tokens.len());
+fn split_phrase_multiline(
+    tokens: &[String],
+    spans: &[WordSpan],
+    frame_w: u32,
+    font_px: u32,
+) -> Vec<(Vec<String>, Vec<WordSpan>)> {
+    eprintln!(
+        "DEBUG: split_phrase_multiline start. tokens={}",
+        tokens.len()
+    );
     let (tokens, spans) = preprocess_hyphenated_tokens(tokens, spans); // Handle hyphens first
 
     let est_char_width = (font_px as f32 * 0.7).max(1.0); // Consistent with split_phrase_for_width
-    let max_chars_per_line = ((frame_w as f32 * 0.9) / est_char_width).floor() as usize; 
+    let max_chars_per_line = ((frame_w as f32 * 0.9) / est_char_width).floor() as usize;
     let max_lines = 4;
     // Target roughly 3-4 lines if text is long enough, otherwise fill normally.
     // Calculate total chars to see if we SHOULD force multiline
     let total_chars: usize = tokens.iter().map(|t| t.len()).sum();
-    
+
     // If text is short, just use standard wrapping (it might end up as 1-2 lines)
     if total_chars < max_chars_per_line * 2 {
         return split_phrase_for_width(&tokens, &spans, frame_w, font_px);
@@ -1841,11 +2159,11 @@ fn split_phrase_multiline(tokens: &[String], spans: &[WordSpan], frame_w: u32, f
     let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
     let min_chars = 25.min(max_chars_per_line).max(1); // Ensure min is not > max, and at least 1
     let target_chars = soft_target.clamp(min_chars, max_chars_per_line);
-    
+
     let mut segments = Vec::new();
     // In this specific "Storyteller" mode, we act as if the entire phrase is ONE segment (one screen),
-    // but the renderer expects a list of segments. 
-    // Wait, the renderer iterates segments and shows them sequentially. 
+    // but the renderer expects a list of segments.
+    // Wait, the renderer iterates segments and shows them sequentially.
     // If we want *one static block* of 3-4 lines, we need to return ONE segment containing ALL tokens,
     // but we need to insert manual line breaks (\N) into the text later?
     //
@@ -1854,7 +2172,7 @@ fn split_phrase_multiline(tokens: &[String], spans: &[WordSpan], frame_w: u32, f
     // The user wants "a 3-4 line preset... so caption doesn't overlap".
     // This implies showing MORE text at once.
     // So we should return FEWER segments, each containing MORE tokens, formatted with line breaks.
-    
+
     // Actually, `split_phrase_for_width` splits based on WIDTH only.
     // If we want a block of text, we should pack as much as possible into one segment (up to 4 lines),
     // and then the rendering logic needs to handle the line breaks.
@@ -1862,54 +2180,62 @@ fn split_phrase_multiline(tokens: &[String], spans: &[WordSpan], frame_w: u32, f
     // CURRENT LOGIC:
     // `assemble_colored_two_lines` inserts `\N` after `line1_count`. It only supports 2 lines!
     // We need to upgrade `assemble_colored_two_lines` or create a `assemble_multiline` function.
-    
+
     // Let's first pack tokens into chunks that fit in 4 lines.
     let mut current_chunk_tokens = Vec::new();
     let mut current_chunk_spans = Vec::new();
     let mut current_chunk_lines = 1;
     let mut current_line_len = 0;
-    
-    eprintln!("DEBUG: split_phrase_multiline starting loop over {} tokens", tokens.len());
+
+    eprintln!(
+        "DEBUG: split_phrase_multiline starting loop over {} tokens",
+        tokens.len()
+    );
     for (token, span) in tokens.iter().zip(spans.iter()) {
         let token_len = token.len() + 1; // + space
-        
+
         if current_line_len + token_len > target_chars {
-             // Line full. Can we add another line to this chunk?
-             if current_chunk_lines < max_lines {
-                 current_chunk_lines += 1;
-                 current_line_len = token_len;
-                 current_chunk_tokens.push(token.clone());
-                 current_chunk_spans.push(span.clone());
-             } else {
-                 // Chunk full (4 lines). Push and start new chunk.
-                 segments.push((current_chunk_tokens.clone(), current_chunk_spans.clone()));
-                 current_chunk_tokens.clear();
-                 current_chunk_spans.clear();
-                 current_chunk_tokens.push(token.clone());
-                 current_chunk_spans.push(span.clone());
-                 current_chunk_lines = 1;
-                 current_line_len = token_len;
-             }
+            // Line full. Can we add another line to this chunk?
+            if current_chunk_lines < max_lines {
+                current_chunk_lines += 1;
+                current_line_len = token_len;
+                current_chunk_tokens.push(token.clone());
+                current_chunk_spans.push(span.clone());
+            } else {
+                // Chunk full (4 lines). Push and start new chunk.
+                segments.push((current_chunk_tokens.clone(), current_chunk_spans.clone()));
+                current_chunk_tokens.clear();
+                current_chunk_spans.clear();
+                current_chunk_tokens.push(token.clone());
+                current_chunk_spans.push(span.clone());
+                current_chunk_lines = 1;
+                current_line_len = token_len;
+            }
         } else {
             current_line_len += token_len;
             current_chunk_tokens.push(token.clone());
             current_chunk_spans.push(span.clone());
         }
     }
-     if !current_chunk_tokens.is_empty() {
+    if !current_chunk_tokens.is_empty() {
         segments.push((current_chunk_tokens, current_chunk_spans));
     }
-    
-    eprintln!("DEBUG: split_phrase_multiline end. segments={}", segments.len());
+
+    eprintln!(
+        "DEBUG: split_phrase_multiline end. segments={}",
+        segments.len()
+    );
     segments
 }
 
 // Assemble multi-line text with highlighting
 fn assemble_multiline(
-    tokens: &[String], hi: usize,
-    white_bgr: &str, hi_bgr: &str,
+    tokens: &[String],
+    hi: usize,
+    white_bgr: &str,
+    hi_bgr: &str,
     font_size: u32,
-    max_chars_per_line: usize
+    max_chars_per_line: usize,
 ) -> String {
     eprintln!("DEBUG: assemble_multiline start. tokens={}", tokens.len());
     // Similar to assemble_colored_two_lines but auto-wraps based on max_chars
@@ -1925,37 +2251,42 @@ fn assemble_multiline(
 
     let mut s = String::new();
     let mut line_len = 0;
-    
+
     for (i, token) in tokens.iter().enumerate() {
-        if i % 10 == 0 { eprintln!("DEBUG: assemble_multiline loop i={}", i); }
-        let t_clean = token.replace('\\', r"\\").replace('{', r"\{").replace('}', r"\}");
+        if i % 10 == 0 {
+            eprintln!("DEBUG: assemble_multiline loop i={}", i);
+        }
+        let t_clean = token
+            .replace('\\', r"\\")
+            .replace('{', r"\{")
+            .replace('}', r"\}");
         let t_len = t_clean.len();
-        
+
         // Simple wrapping check
         // Simple wrapping check
         // Check if previous token ended with hyphen to suppress space
         let prev_ended_with_hyphen = if i > 0 {
-             let prev = &tokens[i-1];
-             prev.ends_with('-') && prev.len() > 1
+            let prev = &tokens[i - 1];
+            prev.ends_with('-') && prev.len() > 1
         } else {
-             false
+            false
         };
 
         if line_len > 0 && line_len + t_len + 1 > max_chars_per_line {
             s.push_str(r"\N");
             line_len = 0;
         } else if line_len > 0 {
-             if !prev_ended_with_hyphen {
-                 s.push(' ');
-                 line_len += 1;
-             }
+            if !prev_ended_with_hyphen {
+                s.push(' ');
+                line_len += 1;
+            }
         }
-        
+
         // Color logic
         let should_highlight = has_highlighting && i == hi;
         s.push_str(if should_highlight { &hi_style } else { &white });
         s.push_str(&t_clean);
-        
+
         line_len += t_len;
     }
     s
@@ -1980,12 +2311,12 @@ fn split_phrase_two_lines(
     tokens: &[String],
     spans: &[WordSpan],
     frame_w: u32,
-    font_px: u32
+    font_px: u32,
 ) -> Vec<(Vec<String>, Vec<WordSpan>, usize)> {
     // Determine max chars per line
     let est_char_width = (font_px as f32 * 0.7).max(1.0);
     // Use slightly less width to be safe for 2 lines
-    let max_chars = ((frame_w as f32 * 0.9) / est_char_width).floor() as usize; 
+    let max_chars = ((frame_w as f32 * 0.9) / est_char_width).floor() as usize;
 
     // Target total length for a "screenful" (2 lines)
     // We want to fill 2 lines if possible, so max capacity = 2 * max_chars
@@ -2000,16 +2331,16 @@ fn split_phrase_two_lines(
         let token_len = token.len() + 1; // + space
 
         if current_len > 0 && current_len + token_len > max_capacity_chars {
-             // Current 2-line block is full, push it
-             if !current_tokens.is_empty() {
-                 let split_idx = find_best_split(&current_tokens, max_chars);
-                 segments.push((current_tokens.clone(), current_spans.clone(), split_idx));
-                 current_tokens.clear();
-                 current_spans.clear();
-                 current_len = 0;
-             }
+            // Current 2-line block is full, push it
+            if !current_tokens.is_empty() {
+                let split_idx = find_best_split(&current_tokens, max_chars);
+                segments.push((current_tokens.clone(), current_spans.clone(), split_idx));
+                current_tokens.clear();
+                current_spans.clear();
+                current_len = 0;
+            }
         }
-        
+
         current_tokens.push(token.clone());
         current_spans.push(span.clone());
         current_len += token_len;
@@ -2030,8 +2361,8 @@ fn find_best_split(tokens: &[String], max_chars_per_line: usize) -> usize {
         let len = token.len() + 1;
         if current_len + len > max_chars_per_line {
             // This token makes it overflow, so split BEFORE this token
-            // i.e., line 1 ends at index i (0..i includes i items?) 
-            // assemble_colored_two_lines takes line1_count. 
+            // i.e., line 1 ends at index i (0..i includes i items?)
+            // assemble_colored_two_lines takes line1_count.
             // If we return i, line 1 has i items (0 to i-1). Item i starts line 2.
             return i;
         }
@@ -2067,7 +2398,7 @@ mod tests {
         // Duration 1000ms.
         // Part 1: 1000 * 4/7 = 571ms.
         // Part 2: 1000 * 3/7 = 428ms.
-        
+
         let s0 = new_spans[0].start_ms;
         let e0 = new_spans[0].end_ms;
         let s1 = new_spans[1].start_ms;
@@ -2081,7 +2412,7 @@ mod tests {
         assert!(e0 > 0);
         assert_eq!(s1, e0); // Start of next = End of previous
         assert_eq!(e1, 1000);
-        
+
         // Check approximate proportionality
         let d0 = e0 - s0;
         let d1 = e1 - s1;
@@ -2092,7 +2423,7 @@ mod tests {
     #[test]
     fn test_assemble_colored_two_lines_hyphenation() {
         let tokens = vec!["SAKSALAIS-".to_string(), "ROOMALAINEN".to_string()];
-        
+
         // We need to provide dummy args for assemble_colored_two_lines
         // It requires: tokens, hi, white_bgr, hi_bgr, line1_count, header, font_size
         let result = assemble_colored_two_lines(
@@ -2102,27 +2433,26 @@ mod tests {
             "0000FF",
             usize::MAX, // no break
             "{\\an2}",
-            20
+            20,
         );
-        
+
         println!("Result: {}", result);
-        assert!(!result.contains("SAKSALAIS- "), "Should not contain space after hyphen");
+        assert!(
+            !result.contains("SAKSALAIS- "),
+            "Should not contain space after hyphen"
+        );
     }
 
     #[test]
     fn test_assemble_multiline_hyphenation() {
         let tokens = vec!["FOO-".to_string(), "BAR".to_string()];
-        
-        let result = assemble_multiline(
-            &tokens, 
-            usize::MAX,
-            "FFFFFF",
-            "0000FF",
-            20,
-            100
-        );
-        
+
+        let result = assemble_multiline(&tokens, usize::MAX, "FFFFFF", "0000FF", 20, 100);
+
         println!("Result: {}", result);
-        assert!(!result.contains("FOO- "), "Should not contain space after hyphen in multiline");
+        assert!(
+            !result.contains("FOO- "),
+            "Should not contain space after hyphen in multiline"
+        );
     }
 }
