@@ -82,6 +82,7 @@ pub async fn burn_captions_with_segments(
         &probe_result,
         &temp_dir,
         params.font_name,
+        params.font_size,
         params.text_color,
         params.highlight_word_color,
         params.outline_color,
@@ -130,6 +131,7 @@ pub async fn generate_captions_single_pass(
         &probe_result,
         &temp_dir,
         params.font_name,
+        params.font_size,
         params.text_color,
         params.highlight_word_color,
         params.outline_color,
@@ -163,6 +165,7 @@ pub fn generate_preview_layout(
         params.outline_color.as_deref(),
         params.glow_effect,
         params.position.as_deref(),
+        params.font_size,
     );
 
     let mut cues = Vec::new();
@@ -435,6 +438,7 @@ pub async fn generate_preview_frame(
         params.outline_color.as_deref(),
         params.glow_effect,
         params.position.as_deref(),
+        params.font_size,
     );
 
     let ass_doc = build_ass_document(
@@ -583,6 +587,7 @@ async fn optimized_multi_format_encode(
     probe_result: &crate::video::ProbeResult,
     temp_dir: &PathBuf,
     font_name: Option<String>,
+    font_size: Option<u32>,
     text_color: Option<String>,
     highlight_word_color: Option<String>,
     outline_color: Option<String>,
@@ -687,6 +692,7 @@ async fn optimized_multi_format_encode(
             outline_color.as_deref(),
             glow_effect,
             position.as_deref(),
+            font_size,
         );
         emit(RpcEvent::Log {
             id: id.into(),
@@ -1189,8 +1195,9 @@ fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
         }
         let prev = cur.last().unwrap();
         let gap = w.start_ms.saturating_sub(prev.end_ms);
-        let hard_break =
-            [".", "!", "?"].iter().any(|p| prev.text.ends_with(p)) || gap > 350 || cur.len() >= 3;
+        let hard_break = [".", "!", "?"].iter().any(|p| prev.text.ends_with(p))
+            || gap > 2000
+            || cur.len() >= 100;
         if hard_break {
             let tokens = cur.iter().map(|x| x.text.clone()).collect::<Vec<_>>();
             out.push(Phrase {
@@ -1355,7 +1362,7 @@ fn split_phrase_for_width(
 ) -> Vec<(Vec<String>, Vec<WordSpan>)> {
     let (tokens, spans) = preprocess_hyphenated_tokens(tokens, spans); // Handle hyphens first
 
-    let est_char_width = (font_px as f32 * 0.7).max(1.0);
+    let est_char_width = (font_px as f32 * 0.5).max(1.0);
     let max_chars = ((frame_w as f32 * 0.9) / est_char_width).floor() as usize; // Use 90% of width
 
     let mut segments = Vec::new();
@@ -2057,12 +2064,17 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 /// Uses 9:16 format (608x1080) as the reference size
 /// Formula: font_size = reference_font_size * sqrt(current_area / reference_area)
 /// This ensures captions appear the same relative size regardless of video dimensions
-fn calculate_proportional_font_size(frame_w: u32, frame_h: u32) -> u32 {
+fn calculate_proportional_font_size(
+    frame_w: u32,
+    frame_h: u32,
+    base_font_size: Option<u32>,
+) -> u32 {
     // Reference dimensions for 9:16 format at 1080p height
     let reference_width = 608.0; // 9:16 aspect ratio at 1080p height
     let reference_height = 1080.0;
     let reference_area = reference_width * reference_height;
-    let reference_font_size = reference_height * 0.06; // 6% of height, same as original logic
+    // Use provided base font size or default to 6% of height (approx 65px at 1080p)
+    let reference_font_size = base_font_size.unwrap_or((reference_height * 0.06) as u32) as f32;
 
     // Calculate current video area
     let current_area = (frame_w as f32) * (frame_h as f32);
@@ -2088,6 +2100,7 @@ fn default_ass_style(
     outline_color: Option<&str>,
     _glow_effect: bool,
     position: Option<&str>,
+    font_size: Option<u32>,
 ) -> AssStyle {
     // Convert hex colors to ASS format (AABBGGRR), use defaults if None
     let primary = text_color
@@ -2115,7 +2128,7 @@ fn default_ass_style(
 
     AssStyle {
         font_name: font_name.unwrap_or("Montserrat Black").into(),
-        font_size: calculate_proportional_font_size(frame_w, frame_h),
+        font_size: calculate_proportional_font_size(frame_w, frame_h, font_size),
         primary: primary.clone(),
         secondary: primary,
         outline,

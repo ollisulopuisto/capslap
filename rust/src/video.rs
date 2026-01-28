@@ -308,7 +308,27 @@ pub fn build_fitpad_filter_with_options(
     // 3. Subtitles
     if let Some(path) = subtitle_path {
         let escaped_path = escape_subtitle_path(path);
-        filters.push(format!("ass={}", escaped_path));
+
+        // Check for custom fonts directory
+        let fonts_dir_opt = _get_fonts_dir();
+
+        if let Some(fonts_dir) = fonts_dir_opt {
+            let fonts_path_str = fonts_dir.to_string_lossy().to_string();
+            let escaped_fonts_path = escape_subtitle_path(&fonts_path_str);
+            // Append :fontsdir=... to the ass filter
+            // Note: escape_subtitle_path wraps in single quotes, so we strip them for the param value if needed
+            // but for fontsdir inside the filter string, we need to be careful.
+            // standard syntax: ass='path.ass':fontsdir='fonts_path'
+
+            // Re-escape logic specifically for the filter param structure
+            // We strip the outer quotes from our helper for cleaner composition here
+            let clean_path = escaped_path.trim_matches('\'');
+            let clean_fonts = escaped_fonts_path.trim_matches('\'');
+
+            filters.push(format!("ass='{}':fontsdir='{}'", clean_path, clean_fonts));
+        } else {
+            filters.push(format!("ass={}", escaped_path));
+        }
     }
 
     // 3. Encoder-specific format optimization

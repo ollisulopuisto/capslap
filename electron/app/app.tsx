@@ -2,8 +2,21 @@ import React, { useEffect, useState } from 'react'
 import { Button } from '@/app/components/ui/button'
 import { toast, Toaster } from 'sonner'
 import { Switch } from '@/app/components/ui/switch'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select'
-import { Upload, Film, Download, Cog, Trash, Zap, Settings, FileVideo, Key, Palette } from 'lucide-react'
+import { Slider } from '@/app/components/ui/slider'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from '@/app/components/ui/select'
+import { Upload, Film, Download, Cog, Trash, Zap, Settings, FileVideo, Key, Palette, ChevronDown, Check } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
+  DropdownMenuGroup,
+} from '@/app/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { TitleBar } from './components/TitleBar'
 import { ModelDownloader } from './components/ModelDownloader'
@@ -127,6 +140,7 @@ interface Settings {
   selectedLanguage: string
   outputSize?: string
   cropStrategy?: string
+  fontSize: number
 }
 
 const defaultSettings: Settings = {
@@ -143,6 +157,7 @@ const defaultSettings: Settings = {
   selectedLanguage: 'auto',
   outputSize: 'original',
   cropStrategy: 'fit',
+  fontSize: 65,
 }
 
 const templates: Template[] = [
@@ -203,16 +218,61 @@ const availableExportFormats = [
   { id: '4:5', name: '4:5', description: 'Instagram feed posts' },
 ]
 
-const availableFonts = [
-  { id: 'komika-axis', name: 'Komika Axis' },
-  { id: 'montserrat-black', name: 'Montserrat Black' },
-  { id: 'theboldfont', name: 'THEBOLDFONT' },
-  { id: 'kanit-bold', name: 'Kanit Bold' },
-  { id: 'poppins-black', name: 'Poppins Black' },
-  { id: 'oswald-bold', name: 'Oswald Bold' },
-  { id: 'bangers-regular', name: 'Bangers Regular' },
-  { id: 'worksans-bold', name: 'WorkSans Bold' },
-  { id: 'roboto-bold', name: 'Roboto Bold' },
+const fontCategories = [
+  {
+    name: "Modern / Sans",
+    fonts: [
+      { id: 'montserrat-black', name: 'Montserrat Black' },
+      { id: 'roboto-bold', name: 'Roboto Bold' },
+      { id: 'open-sans', name: 'Open Sans' },
+      { id: 'lato', name: 'Lato' },
+      { id: 'raleway', name: 'Raleway' },
+      { id: 'kanit-bold', name: 'Kanit Bold' },
+      { id: 'poppins-black', name: 'Poppins Black' },
+      { id: 'worksans-bold', name: 'WorkSans Bold' },
+    ]
+  },
+  {
+    name: "Display / Impact",
+    fonts: [
+      { id: 'theboldfont', name: 'THEBOLDFONT' },
+      { id: 'bebas-neue', name: 'Bebas Neue' },
+      { id: 'anton', name: 'Anton' },
+      { id: 'lilita-one', name: 'Lilita One' },
+      { id: 'oswald-bold', name: 'Oswald Bold' },
+      { id: 'bangers-regular', name: 'Bangers Regular' },
+    ]
+  },
+  {
+    name: "Fun / Comic",
+    fonts: [
+      { id: 'komika-axis', name: 'Komika Axis' },
+      { id: 'comic-neue', name: 'Comic Neue' },
+      { id: 'fredoka', name: 'Fredoka' },
+      { id: 'chewy', name: 'Chewy' },
+      { id: 'luckiest-guy', name: 'Luckiest Guy' },
+    ]
+  },
+  {
+    name: "Serif / Elegant",
+    fonts: [
+      { id: 'playfair-display', name: 'Playfair Display' },
+      { id: 'merriweather', name: 'Merriweather' },
+      { id: 'lora', name: 'Lora' },
+      { id: 'cinzel', name: 'Cinzel' },
+      { id: 'bodoni-moda', name: 'Bodoni Moda' },
+    ]
+  },
+  {
+    name: "Handwritten / Script",
+    fonts: [
+      { id: 'permanent-marker', name: 'Permanent Marker' },
+      { id: 'patrick-hand', name: 'Patrick Hand' },
+      { id: 'amatic-sc', name: 'Amatic SC' },
+      { id: 'caveat-brush', name: 'Caveat Brush' },
+      { id: 'pacifico', name: 'Pacifico' },
+    ]
+  }
 ]
 
 const FONT_NAMES = {
@@ -225,6 +285,26 @@ const FONT_NAMES = {
   'bangers-regular': 'Bangers Regular',
   'worksans-bold': 'WorkSans Bold',
   'roboto-bold': 'Roboto Bold',
+  'open-sans': 'Open Sans',
+  'lato': 'Lato',
+  'raleway': 'Raleway',
+  'bebas-neue': 'Bebas Neue',
+  'anton': 'Anton',
+  'lilita-one': 'Lilita One',
+  'comic-neue': 'Comic Neue',
+  'fredoka': 'Fredoka',
+  'chewy': 'Chewy',
+  'luckiest-guy': 'Luckiest Guy',
+  'playfair-display': 'Playfair Display',
+  'merriweather': 'Merriweather',
+  'lora': 'Lora',
+  'cinzel': 'Cinzel',
+  'bodoni-moda': 'Bodoni Moda',
+  'permanent-marker': 'Permanent Marker',
+  'patrick-hand': 'Patrick Hand',
+  'amatic-sc': 'Amatic SC',
+  'caveat-brush': 'Caveat Brush',
+  'pacifico': 'Pacifico',
 } as const
 
 const getFontName = (fontId: string): string => {
@@ -524,12 +604,7 @@ export default function App() {
           textColor: videoSettings.textColor,
           highlightWordColor: videoSettings.highlightWordColor,
           outlineColor: videoSettings.outlineColor,
-          fontSize: 60, // Approximate size for 1080p -> This is missing in Rust struct? No, let's check. 
-          // WAIT, looking at types.rs:
-          // pub font_name: Option<String>,
-          // There is NO font_size in PreviewFrameParams!
-          // Removing font_size or checking if it's needed? 
-          // The Rust side `generate_preview_frame` might calculate it or use default?
+          fontSize: videoSettings.fontSize,
           position: position,
           karaoke: captionStyle === 'karaoke' || captionStyle === 'karaoke-multiline',
           multiline: captionStyle === 'karaoke-multiline',
@@ -573,7 +648,8 @@ export default function App() {
     videoSettings.captionPosition,
     videoSettings.captionStyle,
     videoSettings.selectedTemplate,
-    videoSettings.exportFormats
+    videoSettings.exportFormats,
+    videoSettings.fontSize
   ])
 
 
@@ -617,7 +693,9 @@ export default function App() {
       outlineColor: template.outlineColor,
       glowEffect: template.glowEffect,
       selectedFont: template.font,
+      selectedFont: template.font,
       captionPosition: template.position,
+      fontSize: 65, // Reset to default when switching templates to ensure good baseline
     })
   }
 
@@ -733,7 +811,10 @@ export default function App() {
           glowEffect: videoSettings.glowEffect,
           position: videoSettings.captionPosition,
           outputSize: videoSettings.outputSize,
+          position: videoSettings.captionPosition,
+          outputSize: videoSettings.outputSize,
           cropStrategy: videoSettings.cropStrategy,
+          fontSize: videoSettings.fontSize,
         },
         editorJobId
       )
@@ -818,8 +899,10 @@ export default function App() {
           glowEffect: videoSettings.glowEffect,
           position: videoSettings.captionPosition,
           outputSize: videoSettings.outputSize,
+          outputSize: videoSettings.outputSize,
           cropStrategy: videoSettings.cropStrategy,
           apiKey: apiKey,
+          fontSize: videoSettings.fontSize,
         },
         requestId
       )) as any
@@ -1107,21 +1190,54 @@ export default function App() {
 
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">Font</label>
-                    <Select
-                      value={videoSettings.selectedFont}
-                      onValueChange={(value) => updateSettings({ selectedFont: value })}
-                    >
-                      <SelectTrigger className="w-full  h-8 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableFonts.map((font) => (
-                          <SelectItem key={font.id} value={font.id}>
-                            {font.name}
-                          </SelectItem>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" className="w-full justify-between px-3 h-8 text-xs font-normal border-input bg-transparent hover:bg-accent hover:text-accent-foreground">
+                          <span className="truncate">{fontCategories.flatMap(g => g.fonts).find(f => f.id === videoSettings.selectedFont)?.name || videoSettings.selectedFont}</span>
+                          <ChevronDown className="h-4 w-4 opacity-50" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent className="w-56" align="start">
+                        {fontCategories.map((group) => (
+                          <DropdownMenuSub key={group.name}>
+                            <DropdownMenuSubTrigger className="text-xs">
+                              <span className="mr-2">{group.name}</span>
+                            </DropdownMenuSubTrigger>
+                            <DropdownMenuSubContent className="width-48">
+                              {group.fonts.map((font) => (
+                                <DropdownMenuItem
+                                  key={font.id}
+                                  onSelect={() => updateSettings({ selectedFont: font.id })}
+                                  className="text-xs justify-between"
+                                >
+                                  <span className={cn(font.id === 'komika-axis' ? 'font-komika' : 'font-sans')}>
+                                    {font.name}
+                                  </span>
+                                  {videoSettings.selectedFont === font.id && (
+                                    <Check className="h-3 w-3 ml-2" />
+                                  )}
+                                </DropdownMenuItem>
+                              ))}
+                            </DropdownMenuSubContent>
+                          </DropdownMenuSub>
                         ))}
-                      </SelectContent>
-                    </Select>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs text-muted-foreground">Font Size</label>
+                      <span className="text-xs text-muted-foreground font-mono">{videoSettings.fontSize}px</span>
+                    </div>
+                    <Slider
+                      value={[videoSettings.fontSize]}
+                      min={20}
+                      max={200}
+                      step={1}
+                      onValueChange={([value]) => updateSettings({ fontSize: value })}
+                      className="py-2"
+                    />
                   </div>
                   {/* </div> */}
 
