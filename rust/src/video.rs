@@ -126,7 +126,8 @@ pub enum TargetAR {
 }
 
 pub fn round_even(x: u32) -> u32 {
-    (x & !1) + (x & 1) // ensure even for yuv420
+    // Round up to next even number for yuv420 compatibility
+    (x + 1) & !1
 }
 
 pub fn ar_wh(ar: TargetAR) -> (u32, u32) {
@@ -1423,4 +1424,380 @@ pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
 
     // Return with data URI scheme
     Ok(format!("data:image/png;base64,{}", encoded))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ============================================
+    // parse_target_ar tests
+    // ============================================
+
+    #[test]
+    fn test_parse_target_ar_valid_9x16() {
+        let result = parse_target_ar("9:16");
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), TargetAR::AR9x16));
+    }
+
+    #[test]
+    fn test_parse_target_ar_valid_16x9() {
+        let result = parse_target_ar("16:9");
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), TargetAR::AR16x9));
+    }
+
+    #[test]
+    fn test_parse_target_ar_valid_4x5() {
+        let result = parse_target_ar("4:5");
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), TargetAR::AR4x5));
+    }
+
+    #[test]
+    fn test_parse_target_ar_valid_1x1() {
+        let result = parse_target_ar("1:1");
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), TargetAR::AR1x1));
+    }
+
+    #[test]
+    fn test_parse_target_ar_invalid_format() {
+        assert!(parse_target_ar("invalid").is_err());
+        assert!(parse_target_ar("3:2").is_err());
+        assert!(parse_target_ar("").is_err());
+        assert!(parse_target_ar("16x9").is_err()); // wrong separator
+    }
+
+    // ============================================
+    // round_even tests
+    // ============================================
+
+    #[test]
+    fn test_round_even_already_even() {
+        assert_eq!(round_even(2), 2);
+        assert_eq!(round_even(100), 100);
+        assert_eq!(round_even(1920), 1920);
+    }
+
+    #[test]
+    fn test_round_even_odd_numbers() {
+        assert_eq!(round_even(1), 2);
+        assert_eq!(round_even(3), 4);
+        assert_eq!(round_even(1919), 1920);
+        assert_eq!(round_even(1081), 1082);
+    }
+
+    #[test]
+    fn test_round_even_zero() {
+        assert_eq!(round_even(0), 0);
+    }
+
+    // ============================================
+    // ar_wh tests
+    // ============================================
+
+    #[test]
+    fn test_ar_wh_all_formats() {
+        assert_eq!(ar_wh(TargetAR::AR9x16), (9, 16));
+        assert_eq!(ar_wh(TargetAR::AR16x9), (16, 9));
+        assert_eq!(ar_wh(TargetAR::AR4x5), (4, 5));
+        assert_eq!(ar_wh(TargetAR::AR1x1), (1, 1));
+    }
+
+    // ============================================
+    // canvas_no_downscale tests
+    // ============================================
+
+    #[test]
+    fn test_canvas_no_downscale_landscape_to_portrait() {
+        // 1920x1080 landscape video going to 9:16 portrait
+        let (w, h) = canvas_no_downscale(1920, 1080, TargetAR::AR9x16);
+        // Should not downscale, so canvas >= source on both dimensions
+        assert!(w >= 1920 || h >= 1080);
+        // Result should maintain 9:16 aspect ratio
+        let ratio = w as f32 / h as f32;
+        assert!((ratio - 9.0 / 16.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn test_canvas_no_downscale_portrait_to_landscape() {
+        // 1080x1920 portrait video going to 16:9 landscape
+        let (w, h) = canvas_no_downscale(1080, 1920, TargetAR::AR16x9);
+        // Canvas should fit the source
+        assert!(w >= 1080 || h >= 1920);
+        // Result should maintain 16:9 aspect ratio
+        let ratio = w as f32 / h as f32;
+        assert!((ratio - 16.0 / 9.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn test_canvas_no_downscale_same_ar() {
+        // 1920x1080 to 16:9 - should be minimal change
+        let (w, h) = canvas_no_downscale(1920, 1080, TargetAR::AR16x9);
+        assert!(w >= 1920);
+        assert!(h >= 1080);
+    }
+
+    #[test]
+    fn test_canvas_no_downscale_square() {
+        // Any video to square
+        let (w, h) = canvas_no_downscale(1920, 1080, TargetAR::AR1x1);
+        assert_eq!(w, h); // Square means equal dimensions
+        assert!(w >= 1920); // Should be at least as wide as source
+    }
+
+    #[test]
+    fn test_canvas_no_downscale_returns_even_dimensions() {
+        let (w, h) = canvas_no_downscale(1921, 1081, TargetAR::AR16x9);
+        assert_eq!(w % 2, 0, "Width should be even for yuv420");
+        assert_eq!(h % 2, 0, "Height should be even for yuv420");
+    }
+
+    // ============================================
+    // escape_subtitle_path tests
+    // ============================================
+
+    #[test]
+    fn test_escape_subtitle_path_simple() {
+        let result = escape_subtitle_path("/path/to/file.ass");
+        assert_eq!(result, "'/path/to/file.ass'");
+    }
+
+    #[test]
+    fn test_escape_subtitle_path_with_colon() {
+        let result = escape_subtitle_path("/path/to/file:name.ass");
+        assert!(result.contains(r"\:"));
+    }
+
+    #[test]
+    fn test_escape_subtitle_path_with_special_chars() {
+        let result = escape_subtitle_path("/path/to/file [1].ass");
+        // Should be quoted to handle spaces and brackets
+        assert!(result.starts_with("'"));
+        assert!(result.ends_with("'"));
+    }
+
+    #[test]
+    fn test_escape_subtitle_path_windows_style() {
+        let result = escape_subtitle_path("C:\\Users\\test\\file.ass");
+        // Backslashes should be escaped
+        assert!(result.contains(r"\\"));
+        // Drive letter colon should be escaped
+        assert!(result.contains(r"\:"));
+    }
+
+    // ============================================
+    // crf_to_bitrate tests
+    // ============================================
+
+    #[test]
+    fn test_crf_to_bitrate_high_quality() {
+        assert_eq!(crf_to_bitrate("16"), "12M");
+        assert_eq!(crf_to_bitrate("18"), "12M");
+        assert_eq!(crf_to_bitrate("19"), "12M");
+    }
+
+    #[test]
+    fn test_crf_to_bitrate_standard_quality() {
+        assert_eq!(crf_to_bitrate("20"), "8M");
+        assert_eq!(crf_to_bitrate("22"), "8M");
+        assert_eq!(crf_to_bitrate("23"), "8M");
+    }
+
+    #[test]
+    fn test_crf_to_bitrate_medium_quality() {
+        assert_eq!(crf_to_bitrate("24"), "6M");
+        assert_eq!(crf_to_bitrate("26"), "6M");
+        assert_eq!(crf_to_bitrate("27"), "6M");
+    }
+
+    #[test]
+    fn test_crf_to_bitrate_low_quality() {
+        assert_eq!(crf_to_bitrate("28"), "4M");
+        assert_eq!(crf_to_bitrate("35"), "4M");
+        assert_eq!(crf_to_bitrate("51"), "4M");
+    }
+
+    #[test]
+    fn test_crf_to_bitrate_invalid_fallback() {
+        assert_eq!(crf_to_bitrate("invalid"), "8M");
+        assert_eq!(crf_to_bitrate(""), "8M");
+    }
+
+    // ============================================
+    // determine_audio_codec tests
+    // ============================================
+
+    #[test]
+    fn test_determine_audio_codec_no_probe() {
+        let (codec, args) = determine_audio_codec(None);
+        assert_eq!(codec, "aac");
+        assert!(!args.is_empty());
+    }
+
+    #[test]
+    fn test_determine_audio_codec_no_audio() {
+        let probe = ProbeResult {
+            duration: Some(10.0),
+            width: Some(1920),
+            height: Some(1080),
+            fps: Some(30.0),
+            audio: false,
+            video: true,
+            audio_codec: None,
+            audio_bitrate: None,
+            color_space: None,
+            color_transfer: None,
+            color_primaries: None,
+        };
+        let (codec, _) = determine_audio_codec(Some(&probe));
+        assert_eq!(codec, "aac");
+    }
+
+    #[test]
+    fn test_determine_audio_codec_mp3_copy() {
+        let probe = ProbeResult {
+            duration: Some(10.0),
+            width: Some(1920),
+            height: Some(1080),
+            fps: Some(30.0),
+            audio: true,
+            video: true,
+            audio_codec: Some("mp3".to_string()),
+            audio_bitrate: Some(128000),
+            color_space: None,
+            color_transfer: None,
+            color_primaries: None,
+        };
+        let (codec, args) = determine_audio_codec(Some(&probe));
+        assert_eq!(codec, "copy");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn test_determine_audio_codec_pcm_reencode() {
+        let probe = ProbeResult {
+            duration: Some(10.0),
+            width: Some(1920),
+            height: Some(1080),
+            fps: Some(30.0),
+            audio: true,
+            video: true,
+            audio_codec: Some("pcm_s16le".to_string()),
+            audio_bitrate: None,
+            color_space: None,
+            color_transfer: None,
+            color_primaries: None,
+        };
+        let (codec, _) = determine_audio_codec(Some(&probe));
+        assert_eq!(codec, "aac"); // PCM should be re-encoded
+    }
+
+    #[test]
+    fn test_determine_audio_codec_flac_reencode() {
+        let probe = ProbeResult {
+            duration: Some(10.0),
+            width: Some(1920),
+            height: Some(1080),
+            fps: Some(30.0),
+            audio: true,
+            video: true,
+            audio_codec: Some("flac".to_string()),
+            audio_bitrate: None,
+            color_space: None,
+            color_transfer: None,
+            color_primaries: None,
+        };
+        let (codec, _) = determine_audio_codec(Some(&probe));
+        assert_eq!(codec, "aac"); // Lossless should be re-encoded for size
+    }
+
+    #[test]
+    fn test_determine_audio_codec_low_bitrate_aac_copy() {
+        let probe = ProbeResult {
+            duration: Some(10.0),
+            width: Some(1920),
+            height: Some(1080),
+            fps: Some(30.0),
+            audio: true,
+            video: true,
+            audio_codec: Some("aac".to_string()),
+            audio_bitrate: Some(128000), // 128kbps - should copy
+            color_space: None,
+            color_transfer: None,
+            color_primaries: None,
+        };
+        let (codec, args) = determine_audio_codec(Some(&probe));
+        assert_eq!(codec, "copy");
+        assert!(args.is_empty());
+    }
+
+    // ============================================
+    // build_fitpad_filter tests
+    // ============================================
+
+    #[test]
+    fn test_build_fitpad_filter_basic() {
+        let filter = build_fitpad_filter(1920, 1080, None, false);
+        assert!(filter.contains("scale="));
+        assert!(filter.contains("pad="));
+        assert!(filter.contains("format=yuv420p"));
+    }
+
+    #[test]
+    fn test_build_fitpad_filter_with_subtitles() {
+        let filter = build_fitpad_filter(1920, 1080, Some("/path/to/subs.ass"), false);
+        assert!(filter.contains("ass="));
+    }
+
+    #[test]
+    fn test_build_fitpad_filter_with_hdr() {
+        let filter = build_fitpad_filter(1920, 1080, None, true);
+        assert!(filter.contains("tonemap"));
+        assert!(filter.contains("zscale"));
+    }
+
+    #[test]
+    fn test_build_fitpad_filter_videotoolbox_format() {
+        let filter =
+            build_fitpad_filter_with_format(1920, 1080, None, HardwareEncoder::VideoToolbox, false);
+        assert!(filter.contains("format=nv12"));
+    }
+
+    #[test]
+    fn test_build_fitpad_filter_software_format() {
+        let filter =
+            build_fitpad_filter_with_format(1920, 1080, None, HardwareEncoder::Software, false);
+        assert!(filter.contains("format=yuv420p"));
+    }
+
+    #[test]
+    fn test_build_fitpad_filter_fill_strategy() {
+        let filter = build_fitpad_filter_with_options(
+            1080,
+            1920,
+            None,
+            HardwareEncoder::Software,
+            "fill",
+            false,
+        );
+        assert!(filter.contains("crop="));
+        assert!(filter.contains("force_original_aspect_ratio=increase"));
+    }
+
+    #[test]
+    fn test_build_fitpad_filter_fit_strategy() {
+        let filter = build_fitpad_filter_with_options(
+            1080,
+            1920,
+            None,
+            HardwareEncoder::Software,
+            "fit",
+            false,
+        );
+        assert!(filter.contains("pad="));
+        assert!(filter.contains("force_original_aspect_ratio=decrease"));
+    }
 }

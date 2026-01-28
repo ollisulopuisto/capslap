@@ -1943,3 +1943,290 @@ pub fn get_cache_dir() -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(&cache_dir)?;
     Ok(cache_dir)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ============================================
+    // is_digits tests
+    // ============================================
+
+    #[test]
+    fn test_is_digits_valid() {
+        assert!(is_digits("12345"));
+        assert!(is_digits("0"));
+        assert!(is_digits("999"));
+    }
+
+    #[test]
+    fn test_is_digits_invalid() {
+        assert!(!is_digits(""));
+        assert!(!is_digits("12.34"));
+        assert!(!is_digits("abc"));
+        assert!(!is_digits("12a34"));
+        assert!(!is_digits("12 34"));
+        assert!(!is_digits("-123"));
+    }
+
+    // ============================================
+    // format_with_thousands tests
+    // ============================================
+
+    #[test]
+    fn test_format_with_thousands_large_numbers() {
+        assert_eq!(format_with_thousands("1000".to_string()), "1,000");
+        assert_eq!(format_with_thousands("1000000".to_string()), "1,000,000");
+        assert_eq!(
+            format_with_thousands("1234567890".to_string()),
+            "1,234,567,890"
+        );
+    }
+
+    #[test]
+    fn test_format_with_thousands_small_numbers() {
+        assert_eq!(format_with_thousands("100".to_string()), "100");
+        assert_eq!(format_with_thousands("1".to_string()), "1");
+        assert_eq!(format_with_thousands("99".to_string()), "99");
+    }
+
+    #[test]
+    fn test_format_with_thousands_empty() {
+        assert_eq!(format_with_thousands("".to_string()), "");
+    }
+
+    // ============================================
+    // get_model_download_url tests
+    // ============================================
+
+    #[test]
+    fn test_get_model_download_url_valid() {
+        let url = get_model_download_url("ggml-base.bin");
+        assert!(url.contains("huggingface.co"));
+        assert!(url.contains("ggerganov/whisper.cpp"));
+        assert!(url.contains("ggml-base.bin"));
+    }
+
+    #[test]
+    fn test_get_model_download_url_different_models() {
+        let url_tiny = get_model_download_url("ggml-tiny.bin");
+        let url_large = get_model_download_url("ggml-large-v3.bin");
+
+        assert!(url_tiny.contains("ggml-tiny.bin"));
+        assert!(url_large.contains("ggml-large-v3.bin"));
+
+        // Both should use same base URL
+        assert!(url_tiny.starts_with("https://huggingface.co/"));
+        assert!(url_large.starts_with("https://huggingface.co/"));
+    }
+
+    // ============================================
+    // parse_whisper_cpp_output tests
+    // ============================================
+
+    #[test]
+    fn test_parse_whisper_cpp_output_valid_simple() {
+        let json = r#"{
+            "transcription": [
+                {
+                    "offsets": {"from": 0, "to": 1000},
+                    "text": " Hello world"
+                }
+            ]
+        }"#;
+
+        let result = parse_whisper_cpp_output(json);
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert!(response.text.contains("Hello"));
+        assert_eq!(response.segments.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_parse_whisper_cpp_output_multiple_segments() {
+        let json = r#"{
+            "transcription": [
+                {
+                    "offsets": {"from": 0, "to": 1000},
+                    "text": " Hello"
+                },
+                {
+                    "offsets": {"from": 1000, "to": 2000},
+                    "text": " world"
+                }
+            ]
+        }"#;
+
+        let result = parse_whisper_cpp_output(json);
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.segments.as_ref().unwrap().len(), 2);
+        assert!(response.text.contains("Hello"));
+        assert!(response.text.contains("world"));
+    }
+
+    #[test]
+    fn test_parse_whisper_cpp_output_with_tokens() {
+        let json = r#"{
+            "transcription": [
+                {
+                    "offsets": {"from": 0, "to": 2000},
+                    "text": " Hello world",
+                    "tokens": [
+                        {"text": " Hello", "offsets": {"from": 0, "to": 1000}},
+                        {"text": " world", "offsets": {"from": 1000, "to": 2000}}
+                    ]
+                }
+            ]
+        }"#;
+
+        let result = parse_whisper_cpp_output(json);
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        // Should have parsed word-level timestamps
+        assert!(response.words.is_some());
+        let words = response.words.unwrap();
+        assert_eq!(words.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_whisper_cpp_output_empty_transcription() {
+        let json = r#"{"transcription": []}"#;
+        let result = parse_whisper_cpp_output(json);
+        // Empty transcription should error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_whisper_cpp_output_invalid_json() {
+        let result = parse_whisper_cpp_output("not valid json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_whisper_cpp_output_missing_transcription() {
+        let json = r#"{"other_field": "value"}"#;
+        let result = parse_whisper_cpp_output(json);
+        // No transcription = empty text = error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_whisper_cpp_output_duration_calculation() {
+        let json = r#"{
+            "transcription": [
+                {
+                    "offsets": {"from": 0, "to": 5000},
+                    "text": " First segment"
+                },
+                {
+                    "offsets": {"from": 5000, "to": 10000},
+                    "text": " Second segment"
+                }
+            ]
+        }"#;
+
+        let result = parse_whisper_cpp_output(json).unwrap();
+        // Duration should be the end time of the last segment (10s)
+        assert_eq!(result.duration, Some(10.0));
+    }
+
+    #[test]
+    fn test_parse_whisper_cpp_output_skips_special_tokens() {
+        let json = r#"{
+            "transcription": [
+                {
+                    "offsets": {"from": 0, "to": 2000},
+                    "text": " Hello",
+                    "tokens": [
+                        {"text": "[_BEG_]", "offsets": {"from": 0, "to": 100}},
+                        {"text": " Hello", "offsets": {"from": 100, "to": 2000}}
+                    ]
+                }
+            ]
+        }"#;
+
+        let result = parse_whisper_cpp_output(json).unwrap();
+        if let Some(words) = result.words {
+            // Should not include [_BEG_] special token
+            for word in &words {
+                assert!(!word.word.starts_with('['));
+                assert!(!word.word.ends_with(']'));
+            }
+        }
+    }
+
+    // ============================================
+    // check_model_exists tests
+    // ============================================
+
+    #[test]
+    fn test_check_model_exists_unknown_model() {
+        // Unknown model names should return Ok(false)
+        let result = check_model_exists("nonexistent_model_xyz");
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_check_model_exists_known_model_names() {
+        // These should at least not error, even if model doesn't exist
+        let models = ["tiny", "base", "small", "medium", "large", "turbo"];
+        for model in models {
+            let result = check_model_exists(model);
+            assert!(
+                result.is_ok(),
+                "check_model_exists should not error for {}",
+                model
+            );
+        }
+    }
+
+    // ============================================
+    // get_system_whisper_paths tests
+    // ============================================
+
+    #[test]
+    fn test_get_system_whisper_paths_not_empty() {
+        let paths = get_system_whisper_paths();
+        assert!(!paths.is_empty());
+        assert!(paths.contains(&"whisper-cli".to_string()));
+    }
+
+    // ============================================
+    // get_system_ffmpeg_paths tests
+    // ============================================
+
+    #[test]
+    fn test_get_system_ffmpeg_paths_not_empty() {
+        let paths = get_system_ffmpeg_paths();
+        assert!(!paths.is_empty());
+        assert!(paths.contains(&"ffmpeg".to_string()));
+    }
+
+    // ============================================
+    // get_system_ffprobe_paths tests
+    // ============================================
+
+    #[test]
+    fn test_get_system_ffprobe_paths_not_empty() {
+        let paths = get_system_ffprobe_paths();
+        assert!(!paths.is_empty());
+        assert!(paths.contains(&"ffprobe".to_string()));
+    }
+
+    // ============================================
+    // get_cache_dir tests
+    // ============================================
+
+    #[test]
+    fn test_get_cache_dir_creates_directory() {
+        let result = get_cache_dir();
+        assert!(result.is_ok());
+        let cache_dir = result.unwrap();
+        assert!(cache_dir.exists());
+        assert!(cache_dir
+            .to_string_lossy()
+            .contains("capslap_whisper_cache"));
+    }
+}
