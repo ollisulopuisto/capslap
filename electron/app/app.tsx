@@ -3,8 +3,29 @@ import { Button } from '@/app/components/ui/button'
 import { toast, Toaster } from 'sonner'
 import { Switch } from '@/app/components/ui/switch'
 import { Slider } from '@/app/components/ui/slider'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from '@/app/components/ui/select'
-import { Upload, Film, Download, Cog, Trash, Zap, Settings, FileVideo, Key, Palette, ChevronDown, Check } from 'lucide-react'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  SelectGroup,
+  SelectLabel,
+} from '@/app/components/ui/select'
+import {
+  Upload,
+  Film,
+  Download,
+  Cog,
+  Trash,
+  Zap,
+  Settings,
+  FileVideo,
+  Key,
+  Palette,
+  ChevronDown,
+  Check,
+} from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -220,7 +241,7 @@ const availableExportFormats = [
 
 const fontCategories = [
   {
-    name: "Modern / Sans",
+    name: 'Modern / Sans',
     fonts: [
       { id: 'montserrat-black', name: 'Montserrat Black' },
       { id: 'roboto-bold', name: 'Roboto Bold' },
@@ -230,10 +251,10 @@ const fontCategories = [
       { id: 'kanit-bold', name: 'Kanit Bold' },
       { id: 'poppins-black', name: 'Poppins Black' },
       { id: 'worksans-bold', name: 'WorkSans Bold' },
-    ]
+    ],
   },
   {
-    name: "Display / Impact",
+    name: 'Display / Impact',
     fonts: [
       { id: 'theboldfont', name: 'THEBOLDFONT' },
       { id: 'bebas-neue', name: 'Bebas Neue' },
@@ -241,38 +262,38 @@ const fontCategories = [
       { id: 'lilita-one', name: 'Lilita One' },
       { id: 'oswald-bold', name: 'Oswald Bold' },
       { id: 'bangers-regular', name: 'Bangers Regular' },
-    ]
+    ],
   },
   {
-    name: "Fun / Comic",
+    name: 'Fun / Comic',
     fonts: [
       { id: 'komika-axis', name: 'Komika Axis' },
       { id: 'comic-neue', name: 'Comic Neue' },
       { id: 'fredoka', name: 'Fredoka' },
       { id: 'chewy', name: 'Chewy' },
       { id: 'luckiest-guy', name: 'Luckiest Guy' },
-    ]
+    ],
   },
   {
-    name: "Serif / Elegant",
+    name: 'Serif / Elegant',
     fonts: [
       { id: 'playfair-display', name: 'Playfair Display' },
       { id: 'merriweather', name: 'Merriweather' },
       { id: 'lora', name: 'Lora' },
       { id: 'cinzel', name: 'Cinzel' },
       { id: 'bodoni-moda', name: 'Bodoni Moda' },
-    ]
+    ],
   },
   {
-    name: "Handwritten / Script",
+    name: 'Handwritten / Script',
     fonts: [
       { id: 'permanent-marker', name: 'Permanent Marker' },
       { id: 'patrick-hand', name: 'Patrick Hand' },
       { id: 'amatic-sc', name: 'Amatic SC' },
       { id: 'caveat-brush', name: 'Caveat Brush' },
       { id: 'pacifico', name: 'Pacifico' },
-    ]
-  }
+    ],
+  },
 ]
 
 const FONT_NAMES = {
@@ -286,25 +307,25 @@ const FONT_NAMES = {
   'worksans-bold': 'WorkSans Bold',
   'roboto-bold': 'Roboto Bold',
   'open-sans': 'Open Sans',
-  'lato': 'Lato',
-  'raleway': 'Raleway',
+  lato: 'Lato',
+  raleway: 'Raleway',
   'bebas-neue': 'Bebas Neue',
-  'anton': 'Anton',
+  anton: 'Anton',
   'lilita-one': 'Lilita One',
   'comic-neue': 'Comic Neue',
-  'fredoka': 'Fredoka',
-  'chewy': 'Chewy',
+  fredoka: 'Fredoka',
+  chewy: 'Chewy',
   'luckiest-guy': 'Luckiest Guy',
   'playfair-display': 'Playfair Display',
-  'merriweather': 'Merriweather',
-  'lora': 'Lora',
-  'cinzel': 'Cinzel',
+  merriweather: 'Merriweather',
+  lora: 'Lora',
+  cinzel: 'Cinzel',
   'bodoni-moda': 'Bodoni Moda',
   'permanent-marker': 'Permanent Marker',
   'patrick-hand': 'Patrick Hand',
   'amatic-sc': 'Amatic SC',
   'caveat-brush': 'Caveat Brush',
-  'pacifico': 'Pacifico',
+  pacifico: 'Pacifico',
 } as const
 
 const getFontName = (fontId: string): string => {
@@ -609,7 +630,10 @@ export default function App() {
           karaoke: captionStyle === 'karaoke' || captionStyle === 'karaoke-multiline',
           multiline: captionStyle === 'karaoke-multiline',
           glowEffect: videoSettings.glowEffect,
-          exportFormat: videoSettings.exportFormats && videoSettings.exportFormats.length > 0 ? videoSettings.exportFormats[0] : '9:16',
+          exportFormat:
+            videoSettings.exportFormats && videoSettings.exportFormats.length > 0
+              ? videoSettings.exportFormats[0]
+              : '9:16',
           outputSize: '1080p',
           cropStrategy: videoSettings.cropStrategy,
           fitMode: 'cover', // Added missing param if needed, defaults to cover
@@ -649,9 +673,8 @@ export default function App() {
     videoSettings.captionStyle,
     videoSettings.selectedTemplate,
     videoSettings.exportFormats,
-    videoSettings.fontSize
+    videoSettings.fontSize,
   ])
-
 
   useEffect(() => {
     const savedSettings = localStorage.getItem('settings-v3')
@@ -701,7 +724,12 @@ export default function App() {
 
   const handleVideoSelect = async () => {
     try {
-      const paths = await window.rust.openFiles?.([{ name: 'Video Files', extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'wmv', 'flv', 'mpeg', 'mpg', 'm4v', '3gp', 'ts', '*'] }])
+      const paths = await window.rust.openFiles?.([
+        {
+          name: 'Video Files',
+          extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'wmv', 'flv', 'mpeg', 'mpg', 'm4v', '3gp', 'ts', '*'],
+        },
+      ])
 
       if (paths && paths.length > 0) {
         const duplicates = paths.filter((path) => selectedVideos.includes(path))
@@ -1021,9 +1049,7 @@ export default function App() {
                 <div className="flex items-center justify-center gap-2 text-primary/70 text-sm">
                   <span>Supported:</span>
                   <div className="flex gap-1">
-                    <span className="px-1.5 py-0.5 bg-primary/20 rounded text-xs font-mono">
-                      All Video Formats
-                    </span>
+                    <span className="px-1.5 py-0.5 bg-primary/20 rounded text-xs font-mono">All Video Formats</span>
                   </div>
                 </div>
               </div>
@@ -1192,8 +1218,14 @@ export default function App() {
                     <label className="text-xs text-muted-foreground mb-1 block">Font</label>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="outline" className="w-full justify-between px-3 h-8 text-xs font-normal border-input bg-transparent hover:bg-accent hover:text-accent-foreground">
-                          <span className="truncate">{fontCategories.flatMap(g => g.fonts).find(f => f.id === videoSettings.selectedFont)?.name || videoSettings.selectedFont}</span>
+                        <Button
+                          variant="outline"
+                          className="w-full justify-between px-3 h-8 text-xs font-normal border-input bg-transparent hover:bg-accent hover:text-accent-foreground"
+                        >
+                          <span className="truncate">
+                            {fontCategories.flatMap((g) => g.fonts).find((f) => f.id === videoSettings.selectedFont)
+                              ?.name || videoSettings.selectedFont}
+                          </span>
                           <ChevronDown className="h-4 w-4 opacity-50" />
                         </Button>
                       </DropdownMenuTrigger>
@@ -1213,9 +1245,7 @@ export default function App() {
                                   <span className={cn(font.id === 'komika-axis' ? 'font-komika' : 'font-sans')}>
                                     {font.name}
                                   </span>
-                                  {videoSettings.selectedFont === font.id && (
-                                    <Check className="h-3 w-3 ml-2" />
-                                  )}
+                                  {videoSettings.selectedFont === font.id && <Check className="h-3 w-3 ml-2" />}
                                 </DropdownMenuItem>
                               ))}
                             </DropdownMenuSubContent>
@@ -1495,9 +1525,7 @@ export default function App() {
                         <p className="text-muted-foreground mb-4">Click to select or drag and drop files</p>
                         <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
                           <span>Supported:</span>
-                          <span className="px-1.5 py-0.5 bg-muted rounded text-xs font-mono">
-                            All Video Formats
-                          </span>
+                          <span className="px-1.5 py-0.5 bg-muted rounded text-xs font-mono">All Video Formats</span>
                         </div>
                       </div>
                     </div>

@@ -217,11 +217,7 @@ export function CaptionEditor({
           {/* Static Preview Image Layer */}
           {previewFrame ? (
             <div className="absolute inset-0 z-10 bg-black">
-              <img
-                src={previewFrame}
-                className="w-full h-full object-contain"
-                alt="Preview"
-              />
+              <img src={previewFrame} className="w-full h-full object-contain" alt="Preview" />
             </div>
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground">

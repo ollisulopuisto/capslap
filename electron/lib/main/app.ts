@@ -117,15 +117,31 @@ function registerResourcesProtocol() {
 
           let contentType = 'video/mp4' // Default fallback
           switch (ext) {
-            case 'mov': contentType = 'video/quicktime'; break;
-            case 'webm': contentType = 'video/webm'; break;
-            case 'avi': contentType = 'video/x-msvideo'; break;
-            case 'wmv': contentType = 'video/x-ms-wmv'; break;
-            case 'flv': contentType = 'video/x-flv'; break;
+            case 'mov':
+              contentType = 'video/quicktime'
+              break
+            case 'webm':
+              contentType = 'video/webm'
+              break
+            case 'avi':
+              contentType = 'video/x-msvideo'
+              break
+            case 'wmv':
+              contentType = 'video/x-ms-wmv'
+              break
+            case 'flv':
+              contentType = 'video/x-flv'
+              break
             case 'mpeg':
-            case 'mpg': contentType = 'video/mpeg'; break;
-            case '3gp': contentType = 'video/3gpp'; break;
-            case 'ts': contentType = 'video/mp2t'; break;
+            case 'mpg':
+              contentType = 'video/mpeg'
+              break
+            case '3gp':
+              contentType = 'video/3gpp'
+              break
+            case 'ts':
+              contentType = 'video/mp2t'
+              break
             // mp4, m4v stay as video/mp4
           }
 
