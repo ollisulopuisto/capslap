@@ -50,7 +50,7 @@ mac:
       arch:
         - x64
         - arm64
-  identity: 'CapSlap Developer'
+  identity: null
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: 'resources/build/entitlements.mac.plist'
