@@ -97,11 +97,13 @@ download_linux() {
     echo "Downloading FFmpeg..."
     FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
     curl -L "$FFMPEG_URL" -o /tmp/ffmpeg-linux.tar.xz
-    tar -xf /tmp/ffmpeg-linux.tar.xz -C /tmp
+    
+    mkdir -p /tmp/ffmpeg-linux
+    tar -xf /tmp/ffmpeg-linux.tar.xz -C /tmp/ffmpeg-linux
     
     # Find and copy binaries
-    find /tmp -name "ffmpeg" -type f -executable -exec cp {} "$BIN_DIR/" \;
-    find /tmp -name "ffprobe" -type f -executable -exec cp {} "$BIN_DIR/" \;
+    find /tmp/ffmpeg-linux -name "ffmpeg" -type f -executable -exec cp {} "$BIN_DIR/" \;
+    find /tmp/ffmpeg-linux -name "ffprobe" -type f -executable -exec cp {} "$BIN_DIR/" \;
     chmod +x "$BIN_DIR/ffmpeg" "$BIN_DIR/ffprobe"
     
     # Download whisper.cpp Linux build
