@@ -77,7 +77,7 @@ download_google_font "Lora" "Bold"
 # Cinzel
 download_google_font "Cinzel" "Bold"
 # Bodoni Moda
-download_google_font "Bodoni Moda" "Bold" // Note: Variable font usually
+download_google_font "Bodoni Moda" "Bold" # Note: Variable font usually
 
 # --- Handwritten / Script ---
 # Permanent Marker

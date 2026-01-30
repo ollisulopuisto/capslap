@@ -3,15 +3,7 @@ import { Button } from '@/app/components/ui/button'
 import { toast, Toaster } from 'sonner'
 import { Switch } from '@/app/components/ui/switch'
 import { Slider } from '@/app/components/ui/slider'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  SelectGroup,
-  SelectLabel,
-} from '@/app/components/ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select'
 import {
   Upload,
   Film,
@@ -30,13 +22,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
-  DropdownMenuGroup,
 } from '@/app/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { TitleBar } from './components/TitleBar'
@@ -716,7 +705,6 @@ export default function App() {
       outlineColor: template.outlineColor,
       glowEffect: template.glowEffect,
       selectedFont: template.font,
-      selectedFont: template.font,
       captionPosition: template.position,
       fontSize: 65, // Reset to default when switching templates to ensure good baseline
     })
@@ -839,8 +827,6 @@ export default function App() {
           glowEffect: videoSettings.glowEffect,
           position: videoSettings.captionPosition,
           outputSize: videoSettings.outputSize,
-          position: videoSettings.captionPosition,
-          outputSize: videoSettings.outputSize,
           cropStrategy: videoSettings.cropStrategy,
           fontSize: videoSettings.fontSize,
         },
@@ -926,7 +912,6 @@ export default function App() {
           outlineColor: videoSettings.outlineColor,
           glowEffect: videoSettings.glowEffect,
           position: videoSettings.captionPosition,
-          outputSize: videoSettings.outputSize,
           outputSize: videoSettings.outputSize,
           cropStrategy: videoSettings.cropStrategy,
           apiKey: apiKey,

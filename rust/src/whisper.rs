@@ -531,7 +531,6 @@ fn get_bundled_ffmpeg_paths(exe_dir: &std::path::Path) -> Vec<PathBuf> {
 }
 
 /// Get possible project FFmpeg binary paths
-/// Get possible project FFmpeg binary paths
 fn get_project_ffmpeg_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     // Use proper Cargo manifest directory to find bin folder (same as whisper paths)
@@ -593,7 +592,6 @@ fn get_bundled_ffprobe_paths(exe_dir: &std::path::Path) -> Vec<PathBuf> {
     paths
 }
 
-/// Get possible project ffprobe binary paths
 /// Get possible project ffprobe binary paths
 fn get_project_ffprobe_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();

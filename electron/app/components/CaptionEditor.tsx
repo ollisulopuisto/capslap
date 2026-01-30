@@ -32,22 +32,6 @@ interface Settings {
   // ... other settings
 }
 
-const FONT_NAMES = {
-  'montserrat-black': 'Montserrat Black',
-  'komika-axis': 'Komika Axis',
-  theboldfont: 'THEBOLDFONT',
-  'kanit-bold': 'Kanit Bold',
-  'poppins-black': 'Poppins Black',
-  'oswald-bold': 'Oswald Bold',
-  'bangers-regular': 'Bangers Regular',
-  'worksans-bold': 'WorkSans Bold',
-  'roboto-bold': 'Roboto Bold',
-} as const
-
-const getFontName = (fontId: string): string => {
-  return FONT_NAMES[fontId as keyof typeof FONT_NAMES] || 'Montserrat Black'
-}
-
 export interface WordSpan {
   startMs: number
   endMs: number

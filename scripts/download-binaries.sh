@@ -45,8 +45,8 @@ download_macos() {
     fi
     
     curl -L "https://github.com/ggerganov/whisper.cpp/releases/download/${WHISPER_VERSION}/${WHISPER_ASSET}" \
-        -o "$BIN_DIR/whisper-cli-macos-arm64"
-    chmod +x "$BIN_DIR/whisper-cli-macos-arm64"
+        -o "$BIN_DIR/${WHISPER_ASSET}"
+    chmod +x "$BIN_DIR/${WHISPER_ASSET}"
     
     echo "macOS binaries downloaded successfully"
 }
