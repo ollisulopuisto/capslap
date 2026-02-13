@@ -37,3 +37,7 @@ jobs:
       - name: TypeScript check
         working-directory: electron
         run: bunx tsc --noEmit
+
+      - name: Build Electron app
+        working-directory: electron
+        run: bun run vite:build:app
