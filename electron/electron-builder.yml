@@ -15,23 +15,15 @@ asarUnpack:
 extraResources:
   - from: "../rust/target/release/core"
     to: "core"
-  # macOS binaries
-  - from: "../rust/bin/"
-    to: "bin"
-    filter:
-      - "**/*"
-  # Windows binaries
-  - from: "../rust/bin-win/"
-    to: "bin-win"
-    filter:
-      - "**/*"
-  # Linux binaries
-  - from: "../rust/bin-linux/"
-    to: "bin-linux"
-    filter:
-      - "**/*"
+  - from: "../rust/models"
+    to: "models"
 win:
   executableName: CapSlap
+  extraResources:
+    - from: "../rust/bin-win/"
+      to: "bin-win"
+      filter:
+        - "**/*"
   target:
     - target: nsis
       arch:
@@ -45,18 +37,20 @@ nsis:
   allowToChangeInstallationDirectory: true
 mac:
   category: public.app-category.productivity
+  extraResources:
+    - from: "../rust/bin/"
+      to: "bin"
+      filter:
+        - "**/*"
   target:
     - target: dmg
-      arch:
-        - x64
-        - arm64
   identity: null
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: 'resources/build/entitlements.mac.plist'
   entitlementsInherit: 'resources/build/entitlements.mac.inherit.plist'
 dmg:
-  artifactName: CapSlap-${version}-mac.${ext}
+  artifactName: CapSlap-${version}-${arch}-mac.${ext}
   title: ${productName} ${version}
   contents:
     - x: 410
@@ -67,6 +61,11 @@ dmg:
       y: 150
       type: file
 linux:
+  extraResources:
+    - from: "../rust/bin-linux/"
+      to: "bin-linux"
+      filter:
+        - "**/*"
   target:
     - AppImage
     - snap
@@ -74,7 +73,7 @@ linux:
   maintainer: electronjs.org
   category: Utility
 appImage:
-  artifactName: CapSlap-${version}-linux.${ext}
+  artifactName: CapSlap-${version}-${arch}-linux.${ext}
 npmRebuild: false
 publish:
   provider: github
