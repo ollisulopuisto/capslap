@@ -95,15 +95,15 @@ download_linux() {
     
     # Download FFmpeg static build for Linux
     echo "Downloading FFmpeg..."
-    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+    # Use John Van Sickle's reliable static builds for Linux
+    FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
     curl -L "$FFMPEG_URL" -o /tmp/ffmpeg-linux.tar.xz
     
     mkdir -p /tmp/ffmpeg-linux
-    tar -xf /tmp/ffmpeg-linux.tar.xz -C /tmp/ffmpeg-linux
+    tar -xJf /tmp/ffmpeg-linux.tar.xz -C /tmp/ffmpeg-linux --strip-components=1
     
-    # Find and copy binaries
-    find /tmp/ffmpeg-linux -name "ffmpeg" -type f -executable -exec cp {} "$BIN_DIR/" \;
-    find /tmp/ffmpeg-linux -name "ffprobe" -type f -executable -exec cp {} "$BIN_DIR/" \;
+    cp /tmp/ffmpeg-linux/ffmpeg "$BIN_DIR/"
+    cp /tmp/ffmpeg-linux/ffprobe "$BIN_DIR/"
     chmod +x "$BIN_DIR/ffmpeg" "$BIN_DIR/ffprobe"
     
     # Download whisper.cpp Linux build
