@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react'
 import { Button } from '@/app/components/ui/button'
-import { ArrowLeft, ArrowRight, Pencil, Check, X, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Pencil, Check, X, Zap, RefreshCw } from 'lucide-react'
 import { Textarea } from '@/app/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
@@ -49,6 +49,7 @@ interface CaptionEditorProps {
   initialSegments: CaptionSegment[]
   onBurn: (segments: CaptionSegment[]) => void
   onCancel: () => void
+  onRefreshPreview?: () => void
   videoPath: string
   settings: Settings
   previewFrame?: string | null
@@ -66,6 +67,7 @@ export function CaptionEditor({
   initialSegments,
   onBurn,
   onCancel,
+  onRefreshPreview,
   videoPath, // Kept to satisfy props, but unused? Actually used in videoUrl but videoUrl is unused.
   settings,
   previewFrame,
@@ -74,7 +76,19 @@ export function CaptionEditor({
   // Removed unused video playback state
   const [editingSegmentIndex, setEditingSegmentIndex] = useState<number | null>(null)
   const [editText, setEditText] = useState('')
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const activeSegmentRef = useRef<HTMLDivElement>(null)
+
+  const handleRefresh = async () => {
+    if (onRefreshPreview) {
+      setIsRefreshing(true)
+      try {
+        await onRefreshPreview()
+      } finally {
+        setIsRefreshing(false)
+      }
+    }
+  }
 
   // Move the last word of segment[index] to the beginning of segment[index+1]
   const moveLastWordToNext = (index: number) => {
@@ -198,6 +212,25 @@ export function CaptionEditor({
       {/* Left: Preview Image */}
       <div className="flex-1 relative bg-black flex flex-col justify-center items-center border-r border-white/10">
         <div className="relative w-full h-full max-h-full aspect-[9/16] max-w-md mx-auto bg-black">
+          {/* Refresh Button Overlay */}
+          {onRefreshPreview && (
+            <div className="absolute top-4 right-4 z-20">
+              <Button
+                variant="outline"
+                size="icon"
+                className="rounded-full bg-black/40 border-white/20 hover:bg-black/60 hover:border-white/40 text-white backdrop-blur-sm shadow-xl"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleRefresh()
+                }}
+                disabled={isRefreshing}
+                title="Refresh Preview"
+              >
+                <RefreshCw className={cn('w-4 h-4', isRefreshing && 'animate-spin')} />
+              </Button>
+            </div>
+          )}
+
           {/* Static Preview Image Layer */}
           {previewFrame ? (
             <div className="absolute inset-0 z-10 bg-black">

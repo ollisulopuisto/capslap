@@ -1484,6 +1484,7 @@ export default function App() {
                 setIsEditorOpen(false)
                 setEditorJobId('')
               }}
+              onRefreshPreview={() => generatePreviews(editorVideoPath, editorSegments)}
               videoPath={editorVideoPath}
               settings={videoSettings}
               previewFrame={previewFrames[videoSettings.selectedTemplate] || rawPreviewFrame}
