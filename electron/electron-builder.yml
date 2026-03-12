@@ -15,8 +15,9 @@ asarUnpack:
 extraResources:
   - from: "../rust/target/release/core"
     to: "core"
-  - from: "../rust/models"
-    to: "models"
+  # Models should be downloaded on-demand by the app, not bundled by default
+  # - from: "../rust/models"
+  #   to: "models"
 win:
   executableName: CapSlap
   extraResources:
